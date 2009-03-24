@@ -375,7 +375,7 @@ bool
 BerkeleyDbFilesystem::get_xattr(DbTxn *txn, const String &fname,
                                 const String &aname, DynamicBuffer &vbuf) {
   int ret;
-  Dbt key;
+  DbtManaged key;
   DbtManaged data;
   String keystr = fname;
 
