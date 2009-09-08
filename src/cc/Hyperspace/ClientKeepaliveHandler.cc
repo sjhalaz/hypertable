@@ -41,7 +41,7 @@ using namespace Serialization;
 ClientKeepaliveHandler::ClientKeepaliveHandler(Comm *comm, PropertiesPtr &cfg,
                                                Session *session)
   : m_dead(false), m_comm(comm), m_session(session), m_session_id(0),
-    m_last_known_event(0) {
+    m_last_known_event(0), m_next_req(1), m_oldest_outstanding_req(0) {
   int error;
   uint16_t master_port;
   String master_host;
@@ -67,7 +67,7 @@ ClientKeepaliveHandler::ClientKeepaliveHandler(Comm *comm, PropertiesPtr &cfg,
   m_comm->create_datagram_receive_socket(&m_local_addr, 0x10, dhp);
 
   CommBufPtr cbp(Hyperspace::Protocol::create_client_keepalive_request(
-      m_session_id, m_last_known_event));
+      m_session_id, m_last_known_event, m_oldest_outstanding_req));
 
   if ((error = m_comm->send_datagram(m_master_addr, m_local_addr, cbp)
       != Error::OK)) {
@@ -295,7 +295,7 @@ void ClientKeepaliveHandler::handle(Hypertable::EventPtr &event) {
 
           if (notifications > 0) {
             CommBufPtr cbp(Protocol::create_client_keepalive_request(
-                m_session_id, m_last_known_event));
+                m_session_id, m_last_known_event, m_oldest_outstanding_req));
             boost::xtime_get(&m_last_keep_alive_send_time, boost::TIME_UTC);
             if ((error = m_comm->send_datagram(m_master_addr, m_local_addr, cbp)
                 != Error::OK)) {
@@ -340,7 +340,7 @@ void ClientKeepaliveHandler::handle(Hypertable::EventPtr &event) {
     }
 
     CommBufPtr cbp(Hyperspace::Protocol::create_client_keepalive_request(
-        m_session_id, m_last_known_event));
+        m_session_id, m_last_known_event, m_oldest_outstanding_req));
 
     boost::xtime_get(&m_last_keep_alive_send_time, boost::TIME_UTC);
 
@@ -371,6 +371,8 @@ void ClientKeepaliveHandler::expire_session() {
     m_bad_handle_map.clear();
     m_session_id = 0;
     m_last_known_event = 0;
+    m_oldest_outstanding_req = 0;
+    m_next_req = 1;
 
     m_session->state_transition(Session::STATE_DISCONNECTED);
 
@@ -387,7 +389,7 @@ void ClientKeepaliveHandler::expire_session() {
     m_comm->create_datagram_receive_socket(&m_local_addr, 0x10, dhp);
 
     CommBufPtr cbp(Hyperspace::Protocol::create_client_keepalive_request(
-        m_session_id, m_last_known_event));
+        m_session_id, m_last_known_event, m_oldest_outstanding_req));
 
     if ((error = m_comm->send_datagram(m_master_addr, m_local_addr, cbp)
         != Error::OK)) {
@@ -421,7 +423,7 @@ void ClientKeepaliveHandler::destroy_session() {
   int error;
 
   CommBufPtr cbp(Hyperspace::Protocol::create_client_keepalive_request(
-                 m_session_id, m_last_known_event, true));
+                 m_session_id, m_last_known_event, m_oldest_outstanding_req, true));
 
   if ((error = m_comm->send_datagram(m_master_addr, m_local_addr, cbp)
       != Error::OK))
@@ -431,3 +433,26 @@ void ClientKeepaliveHandler::destroy_session() {
   //m_comm->close_socket(m_local_addr);
 }
 
+uint64_t ClientKeepaliveHandler::add_outstanding_req() {
+  ScopedLock lock(m_mutex);
+  m_outstanding_reqs.insert(m_next_req);
+  if (m_outstanding_reqs.size() == 1)
+    m_oldest_outstanding_req = m_next_req;
+
+  ++m_next_req;
+  return (m_next_req-1);
+}
+
+void ClientKeepaliveHandler::remove_outstanding_req(uint64_t req_id) {
+  ScopedLock lock(m_mutex);
+  m_outstanding_reqs.erase(req_id);
+  // if this was the oldest outstanding req then find the new "oldest"
+  if (req_id == m_oldest_outstanding_req) {
+    if (m_outstanding_reqs.size() > 0) {
+      ReqSet::iterator it = m_outstanding_reqs.begin();
+      m_oldest_outstanding_req = *it;
+    }
+    else
+      m_oldest_outstanding_req = 0;
+  }
+}

@@ -23,6 +23,7 @@
 #define HYPERSPACE_CLIENTKEEPALIVEHANDLER_H
 
 #include <cassert>
+#include <set>
 
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/xtime.hpp>
@@ -39,6 +40,7 @@
 #include "ClientHandleState.h"
 
 namespace Hyperspace {
+  using namespace std;
 
   class Session;
 
@@ -77,7 +79,20 @@ namespace Hyperspace {
 
     void destroy_session();
 
+    /**
+     * Add new modifying request (for which we haven't received the server response)
+     * and return the id of the request
+     */
+    uint64_t add_outstanding_req();
+    /**
+     * Remove modifying request, for which we have received the server response
+     * @param Request id
+     */
+    void remove_outstanding_req(uint64_t req_id);
+
   private:
+    // set for storing outstanding request ids
+    typedef set<uint64_t, less<uint64_t> > ReqSet;
 
     Mutex              m_mutex;
     boost::xtime       m_last_keep_alive_send_time;
@@ -88,6 +103,7 @@ namespace Hyperspace {
     uint32_t m_keep_alive_interval;
     struct sockaddr_in m_master_addr;
     struct sockaddr_in m_local_addr;
+
     bool m_verbose;
     Session *m_session;
     uint64_t m_session_id;
@@ -97,6 +113,9 @@ namespace Hyperspace {
     HandleMap  m_handle_map;
     typedef hash_map<uint64_t, boost::xtime> BadNotificationHandleMap;
     BadNotificationHandleMap m_bad_handle_map;
+    uint64_t m_next_req;
+    ReqSet m_outstanding_reqs;
+    uint64_t m_oldest_outstanding_req;
     static const uint64_t ms_bad_notification_grace_period = 120000;
     bool m_reconnect;
   };

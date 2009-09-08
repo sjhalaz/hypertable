@@ -54,23 +54,53 @@ namespace Hyperspace {
   public:
 
     enum { TIMER_INTERVAL_MS=1000 };
+    /**
+     * Enumerate request types
+     */
+    enum {
+      REQ_MKDIR               =  1,
+      REQ_UNLINK              =  2,
+      REQ_OPEN                =  3,
+      REQ_CLOSE               =  4,
+      REQ_ATTR_SET            =  5,
+      REQ_ATTR_GET            =  6,
+      REQ_ATTR_DEL            =  7,
+      REQ_ATTR_EXISTS         =  8,
+      REQ_ATTR_LIST           =  9,
+      REQ_EXISTS              =  10,
+      REQ_READDIR             =  11,
+      REQ_LOCK                =  12,
+      REQ_RELEASE             =  13,
+      REQ_CREATE_SESSION      =  14,
+      REQ_RENEW_SESSION_LEASE =  15
+    };
+    /**
+     * Enumerate handle deletion states
+     */
+    enum {
+      HANDLE_NOT_DEL                =  1,
+      HANDLE_MARKED_FOR_DEL         =  2,
+      HANDLE_UNLOCKED               =  3,
+      HANDLE_PENDING_LOCKS_GRANTED  =  4,
+      HANDLE_EPHEMERAL_NODE_DELETED =  5
+    };
 
     Master(ConnectionManagerPtr &, PropertiesPtr &,
            ServerKeepaliveHandlerPtr &, ApplicationQueuePtr &app_queue_ptr);
     ~Master();
 
     // Hyperspace command implementations
-    void mkdir(ResponseCallback *cb, uint64_t session_id, const char *name);
-    void unlink(ResponseCallback *cb, uint64_t session_id, const char *name);
-    void open(ResponseCallbackOpen *cb, uint64_t session_id, const char *name,
+    void mkdir(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const char *name);
+    void unlink(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const char *name);
+    void open(ResponseCallbackOpen *cb, uint64_t session_id, uint64_t req_id, const char *name,
               uint32_t flags, uint32_t event_mask,
               std::vector<Attribute> &init_attrs);
-    void close(ResponseCallback *cb, uint64_t session_id, uint64_t handle);
-    void attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t handle,
+    void close(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint64_t handle);
+    void attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint64_t handle,
                   const char *name, const void *value, size_t value_len);
     void attr_get(ResponseCallbackAttrGet *cb, uint64_t session_id,
                   uint64_t handle, const char *name);
-    void attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t handle,
+    void attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint64_t handle,
                   const char *name);
     void attr_exists(ResponseCallbackAttrExists *cb, uint64_t session_id, uint64_t handle,
                      const char *name);
@@ -80,9 +110,9 @@ namespace Hyperspace {
                 const char *name);
     void readdir(ResponseCallbackReaddir *cb, uint64_t session_id,
                  uint64_t handle);
-    void lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t handle,
+    void lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t req_id, uint64_t handle,
               uint32_t mode, bool try_lock);
-    void release(ResponseCallback *cb, uint64_t session_id, uint64_t handle);
+    void release(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint64_t handle);
 
     /**
      * Creates a new session by allocating a new SessionData object, obtaining a
@@ -112,9 +142,10 @@ namespace Hyperspace {
      * lease by invoking the RenewLease method of the SessionData object.
      *
      * @param session_id Session ID to renew
+     * @param oldest_outstanding_req purge info abt any requests older than this one
      * @return Error::OK if successful
      */
-    int renew_session_lease(uint64_t session_id);
+    int renew_session_lease(uint64_t session_id, uint64_t oldest_outstanding_req);
 
     bool next_expired_session(SessionDataPtr &, boost::xtime &now);
     void remove_expired_sessions();
@@ -163,11 +194,11 @@ namespace Hyperspace {
      */
     bool find_parent_node(const std::string &normal_name,
                           std::string &parent_name, std::string &child_name);
-    bool destroy_handle(uint64_t handle, int *errorp, std::string &errmsg,
-                        bool wait_for_notify=true);
+    bool destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool wait_for_notify,
+                        uint64_t session_id=0, uint64_t req_id=0, uint32_t req_state=0);
     void release_lock(DbTxn *txn, uint64_t handle, const String &node,
         HyperspaceEventPtr &release_event, NotificationMap &release_notifications);
-    void lock_handle(DbTxn *txn, uint64_t handle, uint32_t mode, String &node = "");
+    void lock_handle(DbTxn *txn, uint64_t handle, uint32_t mode, String &node);
     void lock_handle(DbTxn *txn, uint64_t handle, uint32_t mode, const String &node);
     void lock_handle_with_notification(uint64_t handle, uint32_t mode,
                                        bool wait_for_notify=true);

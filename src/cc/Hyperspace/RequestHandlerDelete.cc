@@ -44,9 +44,10 @@ void RequestHandlerDelete::run() {
   const uint8_t *decode_ptr = m_event_ptr->payload;
 
   try {
+    uint64_t req_id = decode_i64(&decode_ptr, &decode_remain);
     const char *name = decode_vstr(&decode_ptr, &decode_remain);
 
-    m_master->unlink(&cb, m_session_id, name);
+    m_master->unlink(&cb, m_session_id, req_id, name);
   }
   catch (Exception &e) {
     HT_ERROR_OUT << e << HT_END;

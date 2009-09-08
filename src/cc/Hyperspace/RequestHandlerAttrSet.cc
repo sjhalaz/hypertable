@@ -42,12 +42,13 @@ void RequestHandlerAttrSet::run() {
   const uint8_t *decode_ptr = m_event_ptr->payload;
 
   try {
+    uint64_t req_id = decode_i64(&decode_ptr, &decode_remain);
     uint64_t handle = decode_i64(&decode_ptr, &decode_remain);
     const char *name = decode_vstr(&decode_ptr, &decode_remain);
     uint32_t value_len;
     void *value = decode_vstr(&decode_ptr, &decode_remain, &value_len);
 
-    m_master->attr_set(&cb, m_session_id, handle, name, value, value_len);
+    m_master->attr_set(&cb, m_session_id, req_id, handle, name, value, value_len);
   }
   catch (Exception &e) {
     HT_ERROR_OUT << e << HT_END;

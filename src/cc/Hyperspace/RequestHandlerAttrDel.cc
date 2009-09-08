@@ -42,10 +42,11 @@ void RequestHandlerAttrDel::run() {
   const uint8_t *decode_ptr = m_event_ptr->payload;
 
   try {
+    uint64_t req_id = decode_i64(&decode_ptr, &decode_remain);
     uint64_t handle = decode_i64(&decode_ptr, &decode_remain);
     const char *name = decode_vstr(&decode_ptr, &decode_remain);
 
-    m_master->attr_del(&cb, m_session_id, handle, name);
+    m_master->attr_del(&cb, m_session_id, req_id, handle, name);
   }
   catch (Exception &e) {
     HT_ERROR_OUT << e << HT_END;

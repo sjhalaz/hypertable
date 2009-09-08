@@ -41,6 +41,7 @@ extern "C" {
 #include "Common/FileUtils.h"
 #include "Common/StringExt.h"
 #include "Common/System.h"
+#include "Common/Serialization.h"
 
 #include "DfsBroker/Lib/Client.h"
 
@@ -278,7 +279,7 @@ void Master::initialize_session(uint64_t session_id, const String &name) {
  *   > Mark in mem session data as expired
  *   > (Don't delete session completely as handles etc need to be cleaned up)
  */
-int Master::renew_session_lease(uint64_t session_id) {
+int Master::renew_session_lease(uint64_t session_id, uint64_t oldest_outstanding_req) {
   ScopedLock lock(m_session_map_mutex);
   bool renewed = false;
   bool commited = false;
@@ -306,6 +307,17 @@ int Master::renew_session_lease(uint64_t session_id) {
 
     // in mem session data will be cleaned up from map & heap in remove expired sessions
     return Error::HYPERSPACE_EXPIRED_SESSION;
+  }
+  else {
+    // if theres a new oldest outstanding req then delete complete requests
+    if (oldest_outstanding_req != session_data->get_oldest_outstanding_req()) {
+      HT_BDBTXN_BEGIN() {
+        m_bdb_fs->delete_lesser_session_reqs(txn, session_id, oldest_outstanding_req);
+        txn->commit(0);
+      }
+      HT_BDBTXN_END(Error::OK);
+      session_data->set_oldest_outstanding_req(oldest_outstanding_req);
+    }
   }
 
   return Error::OK;
@@ -434,7 +446,7 @@ void Master::remove_expired_sessions() {
  * > Send out CHILD_NODE_ADDED notifications
  */
 void
-Master::mkdir(ResponseCallback *cb, uint64_t session_id, const char *name) {
+Master::mkdir(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const char *name) {
   String abs_name, parent_node;
   String child_name;
   uint64_t event_id;
@@ -444,6 +456,7 @@ Master::mkdir(ResponseCallback *cb, uint64_t session_id, const char *name) {
   bool commited = false, aborted=false;
   int error=0;
   String error_msg;
+  ReqInfo req_info;
 
   if (m_verbose) {
     HT_INFOF("mkdir(session_id=%llu, name=%s)", (Llu)session_id, name);
@@ -474,12 +487,18 @@ Master::mkdir(ResponseCallback *cb, uint64_t session_id, const char *name) {
         EVENT_MASK_CHILD_NODE_ADDED, child_added_notifications)) {
       persist_event_notifications(txn, event_id, child_added_notifications);
       persisted_notifications = true;
+      req_info.event_notifications.push_back(event_id);
     }
     // create node
     m_bdb_fs->mkdir(txn, name);
 
     // create node data
     m_bdb_fs->create_node(txn, name, false, 1);
+
+    // store req info
+    req_info.type = REQ_MKDIR;
+    req_info.state = 1;
+    m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
     txn_commit:
     if (aborted)
@@ -521,7 +540,7 @@ Master::mkdir(ResponseCallback *cb, uint64_t session_id, const char *name) {
  * > Deliver notifications
  */
 void
-Master::unlink(ResponseCallback *cb, uint64_t session_id, const char *name) {
+Master::unlink(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const char *name) {
   String child_name, parent_node;
   String node=name;
   bool has_refs;
@@ -550,6 +569,8 @@ Master::unlink(ResponseCallback *cb, uint64_t session_id, const char *name) {
   }
 
   HT_BDBTXN_BEGIN() {
+      ReqInfo req_info;
+
     // make sure parent node data is setup
     if (!validate_and_create_node_data(txn, parent_node)) {
       error = Error::HYPERSPACE_FILE_NOT_FOUND;
@@ -586,6 +607,7 @@ Master::unlink(ResponseCallback *cb, uint64_t session_id, const char *name) {
         EVENT_MASK_CHILD_NODE_REMOVED, child_removed_notifications)) {
       persist_event_notifications(txn, event_id, child_removed_notifications);
       persisted_notifications = true;
+      req_info.event_notifications.push_back(event_id);
     }
 
     // Delete node
@@ -593,6 +615,11 @@ Master::unlink(ResponseCallback *cb, uint64_t session_id, const char *name) {
 
     // Delete node data
     m_bdb_fs->delete_node(txn, node);
+
+    // store req info
+    req_info.type = REQ_UNLINK;
+    req_info.state = 1;
+    m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
     txn_commit:
       if (aborted)
@@ -622,7 +649,7 @@ Master::unlink(ResponseCallback *cb, uint64_t session_id, const char *name) {
  *
  */
 void
-Master::open(ResponseCallbackOpen *cb, uint64_t session_id, const char *name,
+Master::open(ResponseCallbackOpen *cb, uint64_t session_id, uint64_t req_id, const char *name,
     uint32_t flags, uint32_t event_mask, std::vector<Attribute> &init_attrs) {
 
   SessionDataPtr session_data;
@@ -630,7 +657,7 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, const char *name,
   bool created = false;
   bool is_dir = false;
   bool existed;
-  uint64_t handle;
+  uint64_t handle=0;
   bool lock_notify = false;
   uint32_t cur_lock_mode = 0;
   uint32_t lock_mode = 0;
@@ -669,6 +696,9 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, const char *name,
     aborted = false; commited = false; created = false; is_dir = false; lock_notify = false;
     persisted_lock_acquired_notifications = false; persisted_child_added_notifications = false;
     lock_mode = 0; cur_lock_mode = 0; lock_generation = 0;
+    ReqInfo req_info;
+    uint32_t ret_val_size = 2*sizeof(uint64_t) + 1;
+    uint8_t *ptr, *ret_val;
 
     // make sure parent node is valid and create node_data if needed
     if (!validate_and_create_node_data(txn, parent_node)) {
@@ -745,7 +775,8 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, const char *name,
       created = true;
     } // node doesn't exist in DB
     handle = m_bdb_fs->get_next_id_i64(txn, HANDLE_ID, true);
-    m_bdb_fs->create_handle(txn, handle, node, flags, event_mask, session_id, false);
+    m_bdb_fs->create_handle(txn, handle, node, flags, event_mask, session_id, false,
+                            HANDLE_NOT_DEL);
     m_bdb_fs->add_session_handle(txn, session_id, handle);
 
     // create node added event and persist notifications
@@ -758,6 +789,7 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, const char *name,
         EVENT_MASK_CHILD_NODE_ADDED, child_added_notifications)) {
       persist_event_notifications(txn, child_added_event_id, child_added_notifications);
       persisted_child_added_notifications = true;
+      req_info.event_notifications.push_back(child_added_event_id);
     }
 
     /**
@@ -785,11 +817,22 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, const char *name,
           persist_event_notifications(txn, lock_acquired_event_id,
                                       lock_acquired_notifications);
           persisted_lock_acquired_notifications = true;
+          req_info.event_notifications.push_back(lock_acquired_event_id);
         }
       }
     }
 
     m_bdb_fs->add_node_handle(txn, node, handle);
+
+    // store req info
+    req_info.type = REQ_OPEN;
+    req_info.state = 1;
+    ptr = ret_val = new uint8_t[ret_val_size];
+    Serialization::encode_i64(&ptr, handle);
+    Serialization::encode_i64(&ptr, lock_generation);
+    Serialization::encode_bool(&ptr, created);
+    req_info.ret_val.set(ret_val, ret_val_size, true);
+    m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
     HT_INFOF("handle %llu created ('%s', session=%llu(%s), flags=0x%x, mask=0x%x)",
              (Llu)handle, node.c_str(), (Llu)session_id, session_data->get_name(),
@@ -831,10 +874,14 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, const char *name,
 /**
  * Close
  */
-void Master::close(ResponseCallback *cb, uint64_t session_id, uint64_t handle) {
+void Master::close(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint64_t handle)
+{
   SessionDataPtr session_data;
   int error;
   std::string errmsg;
+  uint8_t *args, *ptr;
+  uint32_t args_size = sizeof(uint64_t);
+  ReqInfo req_info;
 
   if (!get_session(session_id, session_data)) {
     cb->error(Error::HYPERSPACE_EXPIRED_SESSION, "");
@@ -849,13 +896,22 @@ void Master::close(ResponseCallback *cb, uint64_t session_id, uint64_t handle) {
   // delete handle from set of open session handles
   HT_BDBTXN_BEGIN() {
     m_bdb_fs->delete_session_handle(txn, session_id, handle);
+    m_bdb_fs->set_handle_del_state(txn, handle, HANDLE_MARKED_FOR_DEL);
+    // store req info
+    req_info.type = REQ_CLOSE;
+    req_info.state = 1;
+    ptr = args = new uint8_t[args_size];
+    Serialization::encode_i64(&ptr, handle);
+    req_info.args.set(args, args_size, true);
+    m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
+
     txn->commit(0);
   }
   HT_BDBTXN_END_CB(cb);
 
   // if handle was open then destroy it (release lock if any, grant next
   // pending lock, delete ephemeral etc.)
-  if (!destroy_handle(handle, &error, errmsg)) {
+  if (!destroy_handle(handle, &error, errmsg, true, session_id, req_id, req_info.state)) {
     cb->error(error, errmsg);
     return;
   }
@@ -879,7 +935,7 @@ void Master::close(ResponseCallback *cb, uint64_t session_id, uint64_t handle) {
  * > Send response
  */
 void
-Master::attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t handle,
+Master::attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint64_t handle,
                  const char *name, const void *value, size_t value_len) {
   SessionDataPtr session_data;
   int error = 0;
@@ -903,6 +959,7 @@ Master::attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t handle,
   HT_BDBTXN_BEGIN() {
     //(re) initialize vars
     persisted_notifications = false; aborted = false; commited = false;
+    ReqInfo req_info;
 
     if (!m_bdb_fs->handle_exists(txn, handle)) {
       error = Error::HYPERSPACE_INVALID_HANDLE;
@@ -923,7 +980,12 @@ Master::attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t handle,
                                                   attr_set_notifications)) {
       persist_event_notifications(txn, event_id, attr_set_notifications);
       persisted_notifications = true;
+      req_info.event_notifications.push_back(event_id);
     }
+    // store req info
+    req_info.type = REQ_ATTR_SET;
+    req_info.state = 1;
+    m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
     txn_commit:
       if (aborted)
@@ -1043,7 +1105,7 @@ Master::attr_get(ResponseCallbackAttrGet *cb, uint64_t session_id,
  *
  */
 void
-Master::attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t handle,
+Master::attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint64_t handle,
                  const char *name) {
   SessionDataPtr session_data;
   String node;
@@ -1066,6 +1128,7 @@ Master::attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t handle,
   HT_BDBTXN_BEGIN() {
     // (re) initialize vars
     persisted_notifications = false; aborted = false; commited = false;
+    ReqInfo req_info;
 
     if (!m_bdb_fs->handle_exists(txn, handle)) {
       error = Error::HYPERSPACE_INVALID_HANDLE;
@@ -1085,7 +1148,12 @@ Master::attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t handle,
                                                   attr_del_notifications)) {
       persist_event_notifications(txn, event_id, attr_del_notifications);
       persisted_notifications = true;
+      req_info.event_notifications.push_back(event_id);
     }
+    // store req info
+    req_info.type = REQ_ATTR_DEL;
+    req_info.state = 1;
+    m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
     txn_commit:
       if (aborted)
@@ -1118,7 +1186,7 @@ Master::attr_exists(ResponseCallbackAttrExists *cb, uint64_t session_id, uint64_
 {
   SessionDataPtr session_data;
   String node;
-  int error;
+  int error=Error::OK;
   String error_msg;
   bool exists=false;
   bool aborted = false;
@@ -1316,7 +1384,7 @@ Master::readdir(ResponseCallbackReaddir *cb, uint64_t session_id,
  * lock
  */
 void
-Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t handle,
+Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t req_id, uint64_t handle,
              uint32_t mode, bool try_lock) {
   SessionDataPtr session_data;
   bool notify = true;
@@ -1329,7 +1397,7 @@ Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t handle,
   bool persisted_notifications = false;
   bool aborted=false, commited=false;
   int lock_status = 0;
-  int error;
+  int error=Error::OK;
   String error_msg;
 
   if (!get_session(session_id, session_data)) {
@@ -1345,7 +1413,10 @@ Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t handle,
   HT_BDBTXN_BEGIN() {
     // (re) initialize vars
     aborted = false; commited = false; persisted_notifications = false;
-    lock_status=0;
+    lock_status=0; lock_generation = 0;
+    uint8_t *ptr, *ret_val;
+    ReqInfo req_info;
+    uint32_t ret_val_size = sizeof(uint32_t) + sizeof(uint64_t);
 
     if (!m_bdb_fs->handle_exists(txn, handle)) {
       aborted = true;
@@ -1426,6 +1497,7 @@ Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t handle,
                                                     lock_acquired_notifications)) {
         persist_event_notifications(txn, event_id, lock_acquired_notifications);
         persisted_notifications = true;
+        req_info.event_notifications.push_back(event_id);
       }
     }
 
@@ -1438,6 +1510,15 @@ Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t handle,
                      << " lock_generation=" << lock_generation << HT_END;
       }
       else {
+        // store req info
+        req_info.type = REQ_LOCK;
+        req_info.state = 1;
+        ptr = ret_val = new uint8_t[ret_val_size];
+        Serialization::encode_i32(&ptr, lock_status);
+        Serialization::encode_i64(&ptr, lock_generation);
+        req_info.ret_val.set(ret_val, ret_val_size, true);
+        m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
+
         txn->commit(0);
         commited = true;
         HT_DEBUG_OUT << "lock txn=" << txn << " commited " << " handle=" << handle << " node="
@@ -1513,7 +1594,7 @@ void Master::lock_handle(DbTxn *txn, uint64_t handle, uint32_t mode, const Strin
  * release
  */
 void
-Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t handle) {
+Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint64_t handle) {
   SessionDataPtr session_data;
   String node;
   int error = 0;
@@ -1522,6 +1603,9 @@ Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t handle) {
                   lock_acquired_notifications;
   HyperspaceEventPtr lock_release_event, lock_granted_event, lock_acquired_event;
   bool aborted = false, commited = false;
+  ReqInfo req_info;
+  uint8_t *args, *ptr;
+  uint32_t args_size = sizeof(uint64_t);
 
   if (!get_session(session_id, session_data)) {
     cb->error(Error::HYPERSPACE_EXPIRED_SESSION, "");
@@ -1545,6 +1629,15 @@ Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t handle) {
     m_bdb_fs->get_handle_node(txn, handle, node);
 
     release_lock(txn, handle, node, lock_release_event, lock_release_notifications);
+    // store req info
+    req_info.type = REQ_RELEASE;
+    req_info.state = 1;
+    ptr = args = new uint8_t[args_size];
+    Serialization::encode_i64(&ptr, handle);
+    req_info.args.set(args, args_size, true);
+    m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
+    if (lock_release_notifications.size() > 0)
+        m_bdb_fs->add_session_req_event(txn, session_id, req_id, lock_release_event->get_id());
 
     txn_commit_1:
       if (aborted)
@@ -1571,6 +1664,21 @@ Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t handle) {
   HT_BDBTXN_BEGIN() {
     grant_pending_lock_reqs(txn, node, lock_granted_event, lock_granted_notifications,
         lock_acquired_event, lock_acquired_notifications);
+
+    // update req info
+    req_info.state++;
+    m_bdb_fs->update_session_req_state(txn, session_id, req_id, req_info.state);
+    // delete lock release event notification if reqd
+    if (lock_release_notifications.size() > 0)
+      m_bdb_fs->delete_session_req_event(txn, session_id, req_id,
+                                         lock_release_event->get_id());
+    // add lock granted and acquired events
+    if (lock_granted_notifications.size() > 0)
+      m_bdb_fs->add_session_req_event(txn, session_id, req_id, lock_granted_event->get_id());
+    if (lock_acquired_notifications.size() > 0)
+      m_bdb_fs->add_session_req_event(txn, session_id, req_id,
+                                      lock_acquired_event->get_id());
+    // commit txn
     txn->commit(0);
   }
   HT_BDBTXN_END_CB(cb);
@@ -1818,10 +1926,11 @@ Master::find_parent_node(const String &normal_name,String &parent_name, String &
  *       > delete node from BDB
  *     > End BDB txn
  *
+ * > Delete handle from BDB
  */
 bool
-Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg,
-                       bool wait_for_notify) {
+Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool wait_for_notify,
+                       uint64_t session_id, uint64_t req_id, uint32_t req_state) {
   bool has_refs = false;
   NotificationMap lock_release_notifications, lock_granted_notifications,
                   lock_acquired_notifications, node_removed_notifications;
@@ -1831,13 +1940,24 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg,
   String node;
 
   HT_DEBUG_OUT << "destroy_handle (handle=" << handle << ")" << HT_END;
+  // either this is part of a request or not
+  HT_ASSERT((session_id != 0 && req_id !=0 ) || (session_id ==0 && req_id ==0));
 
   // txn 1: release lock
   HT_BDBTXN_BEGIN() {
     m_bdb_fs->get_handle_node(txn, handle, node);
     m_bdb_fs->delete_node_handle(txn, node, handle);
-
     release_lock(txn, handle, node, lock_release_event, lock_release_notifications);
+    m_bdb_fs->set_handle_del_state(txn, handle, HANDLE_UNLOCKED);
+
+    // update request state if reqd
+    if (req_id != 0) {
+      ++req_state;
+      m_bdb_fs->update_session_req_state(txn, session_id, req_id, req_state);
+      // add event notification if reqd
+      if (lock_release_notifications.size() > 0)
+        m_bdb_fs->add_session_req_event(txn, session_id, req_id, lock_release_event->get_id());
+    }
     txn->commit(0);
   }
   HT_BDBTXN_END(false);
@@ -1850,6 +1970,23 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg,
   HT_BDBTXN_BEGIN() {
     grant_pending_lock_reqs(txn, node, lock_granted_event, lock_granted_notifications,
         lock_acquired_event, lock_acquired_notifications);
+    m_bdb_fs->set_handle_del_state(txn, handle, HANDLE_PENDING_LOCKS_GRANTED);
+
+    // update request state if reqd
+    if (req_id != 0) {
+      ++req_state;
+      m_bdb_fs->update_session_req_state(txn, session_id, req_id, req_state);
+      // delete lock release event notification if reqd
+      if (lock_release_notifications.size() > 0)
+        m_bdb_fs->delete_session_req_event(txn, session_id, req_id,
+                                           lock_release_event->get_id());
+      // add lock granted and acquired events
+      if (lock_granted_notifications.size() > 0)
+        m_bdb_fs->add_session_req_event(txn, session_id, req_id, lock_granted_event->get_id());
+      if (lock_acquired_notifications.size() > 0)
+        m_bdb_fs->add_session_req_event(txn, session_id, req_id,
+                                        lock_acquired_event->get_id());
+    }
     txn->commit(0);
   }
   HT_BDBTXN_END(false);
@@ -1882,6 +2019,23 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg,
         node_removed = true;
       }
     }
+    m_bdb_fs->set_handle_del_state(txn, handle, HANDLE_EPHEMERAL_NODE_DELETED);
+
+    // update request state if reqd
+    if (req_id != 0) {
+      ++req_state;
+      m_bdb_fs->update_session_req_state(txn, session_id, req_id, req_state);
+      // delete lock granted and acquired events
+      if (lock_granted_notifications.size() > 0)
+        m_bdb_fs->delete_session_req_event(txn, session_id, req_id,
+                                           lock_granted_event->get_id());
+      if (lock_acquired_notifications.size() > 0)
+        m_bdb_fs->delete_session_req_event(txn, session_id, req_id,
+                                           lock_acquired_event->get_id());
+      // add node removed notification if reqd
+      if (node_removed_notifications.size() > 0)
+        m_bdb_fs->add_session_req_event(txn, session_id, req_id, node_removed_event->get_id());
+    }
     txn->commit(0);
   }
   HT_BDBTXN_END(false);
@@ -1894,6 +2048,15 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg,
   // txn 4: delete handle data from BDB
   HT_BDBTXN_BEGIN() {
     m_bdb_fs->delete_handle(txn, handle);
+    // update request state if reqd
+    if (req_id != 0) {
+      ++req_state;
+      m_bdb_fs->update_session_req_state(txn, session_id, req_id, req_state);
+      // delete node removed notification if reqd
+      if (node_removed_notifications.size() > 0)
+        m_bdb_fs->delete_session_req_event(txn, session_id, req_id,
+                                           node_removed_event->get_id());
+    }
     txn->commit(0);
   }
   HT_BDBTXN_END(false);
