@@ -45,17 +45,22 @@ namespace StateDbKeys {
       SESSION_HANDLES                          ,
       SESSION_EXPIRED                          ,
       SESSION_NAME                             ,
+      SESSION_REQS                             ,
+      SESSION_REQ_ARGS                         ,
+      SESSION_REQ_EVENTS                       ,
+      SESSION_REQ_RET_VAL                      ,
+      SESSION_REQ_TYPE_STATE                   ,
 
       //HandleMap
       HANDLES                      = 0x60000001,
       //Handle state
       HANDLE_ID                                ,
-      HANDLE_NAME                              ,
       HANDLE_OPEN_FLAGS                        ,
       HANDLE_EVENT_MASK                        ,
       HANDLE_LOCKED                            ,
       HANDLE_NODE_NAME                         ,
       HANDLE_SESSION_ID                        ,
+      HANDLE_DEL_STATE                         ,
 
       //NodeMap
       NODES                        = 0x80000001,
@@ -87,6 +92,7 @@ namespace StateDbKeys {
     const String HANDLES_STR           = PATH_DELIM_STR + "HANDLES"
                                          + PATH_DELIM_STR;
     const String HANDLE_OPEN_FLAGS_STR = "FLAG";
+    const String HANDLE_DEL_STATE_STR  = "DEL";
     const String HANDLE_EVENT_MASK_STR = "EVT_MASK";
     const String HANDLE_LOCKED_STR     = "LCKD";
     const String HANDLE_NODE_NAME_STR  = "NODE_NAME";
@@ -101,6 +107,17 @@ namespace StateDbKeys {
     const String SESSION_HANDLES_STR             = "HANDLES" +
                                                    PATH_DELIM_STR;
     const String SESSION_NAME_STR                = "NAME";
+
+    const String SESSION_REQS_STR                = "REQS" + PATH_DELIM_STR;
+    const String SESSION_REQ_STR                 = "REQ" + PATH_DELIM_STR;
+    const String SESSION_REQ_ARGS_STR            = "ARGS" + PATH_DELIM_STR;
+    const String SESSION_REQ_EVENTS_STR          = "EVTS" + PATH_DELIM_STR;
+    const String SESSION_REQ_RET_VAL_STR         = "RET" + PATH_DELIM_STR;
+    const String SESSION_REQ_TYPE_STATE_STR      = "TS" + PATH_DELIM_STR;
+
+    const uint32_t SESSION_REQ_TYPE_MASK         = 0xFFFF0000;
+    const uint32_t SESSION_REQ_STATE_MASK        = 0x0000FFFF;
+
 
     const String NODES_STR                       = PATH_DELIM_STR +
                                                    "NODES" +
@@ -123,7 +140,7 @@ namespace StateDbKeys {
     const String EVENT_GENERATION_STR = "GEN";
     const String EVENT_NOTIFICATION_HANDLES_STR = "NF_HDLS";
 
-    const String NEXT_IDS = "/NXT_ID/";
+    const String NEXT_IDS = PATH_DELIM_STR + "NXT_ID" + PATH_DELIM_STR;
     const String NEXT_SESSION_ID = NEXT_IDS + "SESS";
     const String NEXT_EVENT_ID   = NEXT_IDS + "EVT";
     const String NEXT_HANDLE_ID  = NEXT_IDS + "HDL";
@@ -136,6 +153,16 @@ namespace StateDbKeys {
      * @return String key for storage/retrieval in BerkeleyDB
      */
     String get_session_key(uint64_t id, uint32_t key_type);
+
+    /**
+     * Get State key for a request made by a session
+     *
+     * @param id Session id
+     * @param req_id request id
+     * @param key_type requested piece of state
+     * @return String key for storage/retrieval in BerkeleyDB
+     */
+    String get_session_req_key(uint64_t id, uint64_t req_id, uint32_t key_type);
 
     /**
      * Get State key to a piece of Event object

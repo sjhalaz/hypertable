@@ -29,6 +29,7 @@
 #include "Common/Logger.h"
 #include "Common/Serialization.h"
 #include "Common/String.h"
+#include "Common/ScopeGuard.h"
 
 #include "BerkeleyDbFilesystem.h"
 #include "DbtManaged.h"
@@ -50,6 +51,13 @@ using namespace StateDbKeys;
   _out_ <<"' key='" << (char *)(_k_).get_data(); \
   if (_l_) _out_ <<"' value='"<< format_bytes(20, _v_, _l_); \
   _out_ <<"'"<< HT_END
+
+void close_db_cursor(Dbc **cursor) {
+  if (*cursor != 0) {
+    (*cursor)->close();
+    *cursor = 0;
+  }
+}
 
 /**
  */
@@ -390,6 +398,7 @@ BerkeleyDbFilesystem::get_xattr(DbTxn *txn, const String &fname,
       memcpy(vbuf.base, (uint8_t *)data.get_data(), data.get_size());
       vbuf.ptr += data.get_size();
       HT_DEBUG_ATTR_(txn, fname, aname, key, vbuf.base, data.get_size());
+      data.clear();
       return true;
     }
   }
@@ -521,6 +530,7 @@ void BerkeleyDbFilesystem::unlink(DbTxn *txn, const String &name) {
   DbtManaged keym, datam;
   Dbt key;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   bool looks_like_dir = false;
   bool looks_like_file = false;
   String str;
@@ -538,7 +548,6 @@ void BerkeleyDbFilesystem::unlink(DbTxn *txn, const String &name) {
           if (str[name.length()] == '/') {
             if (str.length() > name.length() + 1
                 && str[name.length() + 1] != NODE_ATTR_DELIM) {
-              cursorp->close();
               HT_THROW(HYPERSPACE_DIR_NOT_EMPTY, name);
             }
             looks_like_dir = true;
@@ -558,9 +567,6 @@ void BerkeleyDbFilesystem::unlink(DbTxn *txn, const String &name) {
                starts_with(keym.get_str(), name.c_str()));
     }
 
-    cursorp->close();
-    cursorp = 0;
-
     HT_ASSERT(!(looks_like_dir && looks_like_file));
 
     if (delkeys.empty())
@@ -575,8 +581,6 @@ void BerkeleyDbFilesystem::unlink(DbTxn *txn, const String &name) {
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if (cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -678,6 +682,7 @@ BerkeleyDbFilesystem::get_directory_listing(DbTxn *txn, String fname,
   DbtManaged keym, datam;
   Dbt key;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String str, last_str;
   DirEntry entry;
   size_t offset;
@@ -694,7 +699,6 @@ BerkeleyDbFilesystem::get_directory_listing(DbTxn *txn, String fname,
     if (cursorp->get(&keym, &datam, DB_SET_RANGE) != DB_NOTFOUND) {
 
       if (!starts_with(keym.get_str(), fname.c_str())) {
-        cursorp->close();
         HT_THROW(HYPERSPACE_BAD_PATHNAME, fname);
       }
 
@@ -740,15 +744,9 @@ BerkeleyDbFilesystem::get_directory_listing(DbTxn *txn, String fname,
                starts_with(keym.get_str(), fname.c_str()));
 
     }
-
-    cursorp->close();
-    cursorp = 0;
-
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if (cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -761,7 +759,8 @@ void
 BerkeleyDbFilesystem::get_all_names(DbTxn *txn,
                                     std::vector<String> &names) {
   DbtManaged keym, datam;
-  Dbc *cursorp = NULL;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   int ret;
 
   HT_DEBUG_OUT <<"txn="<< txn << HT_END;
@@ -779,9 +778,6 @@ BerkeleyDbFilesystem::get_all_names(DbTxn *txn,
   catch(std::exception &e) {
     HT_FATALF("Berkeley DB error: %s", e.what());
   }
-
-  if (cursorp != NULL)
-    cursorp->close();
 }
 
 void
@@ -807,7 +803,8 @@ BerkeleyDbFilesystem::list_xattr(DbTxn *txn, const String& fname,
                                  std::vector<String> &anames)
 {
   DbtManaged keym, datam;
-  Dbc *cursorp = NULL;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   int ret;
   bool isdir;
 
@@ -835,16 +832,10 @@ BerkeleyDbFilesystem::list_xattr(DbTxn *txn, const String& fname,
         anames.push_back(attribute);
       }
     }
-    if (cursorp != NULL)
-      cursorp->close();
   } catch(DbException &e) {
-    if (cursorp != NULL)
-      cursorp->close();
     HT_FATALF("Berkeley DB error: %s", e.what());
     return false;
   } catch(std::exception &e) {
-    if (cursorp != NULL)
-      cursorp->close();
     HT_FATALF("Berkeley DB error: %s", e.what());
     return false;
   }
@@ -864,6 +855,7 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
   String key_str;
   char numbuf[16];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"create_event txn="<< txn <<" event type='"<< type <<"' id="
       << id << " mask=" << mask << HT_END;
@@ -879,8 +871,6 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
 
     m_state_db->cursor(txn, &cursorp, 0);
     ret = cursorp->put(&keym, &datam, DB_KEYLAST);
-    cursorp->close();
-    cursorp = 0;
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
 
     // Store event type
@@ -902,8 +892,6 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -921,7 +909,6 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
   int ret;
   String key_str;
   DbtManaged keym, datam;
-  Dbc *cursorp = 0;
 
   try {
     create_event(txn, type, id, mask);
@@ -934,8 +921,6 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -953,7 +938,6 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
   DbtManaged  keym, datam;
   String key_str;
   char numbuf[16];
-  Dbc *cursorp = 0;
 
   try {
     create_event(txn, type, id, mask);
@@ -968,8 +952,6 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -988,7 +970,6 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
   DbtManaged keym, datam;
   String key_str;
   char numbuf[16];
-  Dbc *cursorp = 0;
 
   try {
     create_event(txn, type, id, mask, mode);
@@ -1003,8 +984,6 @@ BerkeleyDbFilesystem::create_event(DbTxn *txn, uint32_t type, uint64_t id,
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1067,6 +1046,7 @@ BerkeleyDbFilesystem::delete_event(DbTxn *txn, uint64_t id)
   String key_str;
   char numbuf[16];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"delete_event txn="<< txn <<" event id="<< id << HT_END;
   try {
@@ -1081,8 +1061,6 @@ BerkeleyDbFilesystem::delete_event(DbTxn *txn, uint64_t id)
     m_state_db->cursor(txn, &cursorp, 0);
     cursorp->get(&keym, &datam, DB_GET_BOTH);
     cursorp->del(0);
-    cursorp->close();
-    cursorp = 0;
 
     // Delete event type
     key_str = get_event_key(id, EVENT_TYPE);
@@ -1133,8 +1111,6 @@ BerkeleyDbFilesystem::delete_event(DbTxn *txn, uint64_t id)
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1150,6 +1126,7 @@ BerkeleyDbFilesystem::event_exists(DbTxn *txn, uint64_t id)
 {
   DbtManaged keym, datam;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   bool exists = true;
   char numbuf[16];
 
@@ -1167,14 +1144,9 @@ BerkeleyDbFilesystem::event_exists(DbTxn *txn, uint64_t id)
     if(cursorp->get(&keym, &datam, DB_GET_BOTH) == DB_NOTFOUND) {
       exists = false;
     }
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if (cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1200,6 +1172,7 @@ BerkeleyDbFilesystem::create_session(DbTxn *txn, uint64_t id, const String& addr
   String expbuf;
   char numbuf[16];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"create_session txn="<< txn <<" create session addr='"<< addr
               << " id="<< id << HT_END;
@@ -1214,8 +1187,6 @@ BerkeleyDbFilesystem::create_session(DbTxn *txn, uint64_t id, const String& addr
 
     m_state_db->cursor(txn, &cursorp, 0);
     ret = cursorp->put(&keym, &datam, DB_KEYLAST);
-    cursorp->close();
-    cursorp = 0;
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
 
     // Store session addr
@@ -1236,8 +1207,6 @@ BerkeleyDbFilesystem::create_session(DbTxn *txn, uint64_t id, const String& addr
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1260,9 +1229,12 @@ BerkeleyDbFilesystem::delete_session(DbTxn *txn, uint64_t id)
   String key_str;
   char numbuf[16];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"delete_session txn="<< txn <<" session id="<< id << HT_END;
   try {
+    // Delete all request info
+    delete_all_session_reqs(txn, id);
 
     // Delete session expired status
     key_str = get_session_key(id, SESSION_EXPIRED);
@@ -1309,14 +1281,9 @@ BerkeleyDbFilesystem::delete_session(DbTxn *txn, uint64_t id)
     ret = cursorp->del(0);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
 
-    cursorp->close();
-    cursorp = 0;
-
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1335,6 +1302,7 @@ BerkeleyDbFilesystem::expire_session(DbTxn *txn, uint64_t id)
   DbtManaged keym, datam;
   String key_str;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"expire_session txn="<< txn <<" session id="<< id << HT_END;
 
@@ -1351,13 +1319,9 @@ BerkeleyDbFilesystem::expire_session(DbTxn *txn, uint64_t id)
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
 
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1371,6 +1335,601 @@ BerkeleyDbFilesystem::expire_session(DbTxn *txn, uint64_t id)
 /**
  *
  */
+bool
+BerkeleyDbFilesystem::session_req_exists(DbTxn *txn, uint64_t id, uint64_t req_id)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+  bool exists=true;
+
+  HT_DEBUG_OUT << "session_req_exists txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+  try {
+    // Check request id under /SESSIONS/id/REQS/
+    String session_reqs_dir = get_session_key(id, SESSION_REQS);
+    keym.set_str(session_reqs_dir);
+
+    m_state_db->cursor(txn, &cursorp, 0);
+    ret = cursorp->get(&keym, &datam, DB_GET_BOTH);
+    HT_EXPECT(ret == 0 || ret == DB_NOTFOUND, HYPERSPACE_STATEDB_ERROR);
+    if (ret == DB_NOTFOUND)
+      exists = false;
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+  HT_DEBUG_OUT << "exitting session_req_exists txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << "exists=" << exists << HT_END;
+
+  return (exists);
+}
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::add_session_req(DbTxn *txn, uint64_t id, uint64_t req_id,
+                                      ReqInfo &req_info)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  Dbt data;
+  String key_str;
+  char numbuf[17];
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+
+  HT_DEBUG_OUT << "add_session_req txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+    HT_EXPECT(!session_req_exists(txn, id, req_id), HYPERSPACE_STATEDB_ERROR);
+
+    // Store request id under /SESSIONS/id/REQS/
+    String session_reqs_dir = get_session_key(id, SESSION_REQS);
+    keym.set_str(session_reqs_dir);
+    sprintf(numbuf, "%llu", (Llu)req_id);
+    datam.set_str(numbuf);
+
+    m_state_db->cursor(txn, &cursorp, 0);
+    ret = cursorp->put(&keym, &datam, DB_KEYLAST);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
+    // Store request args
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_ARGS);
+    keym.set_str(key_str);
+    data.set_data((void*)req_info.args.base);
+    data.set_size(req_info.args.size);
+    ret = m_state_db->put(txn, &keym, &data, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
+    // Store events for this request
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_EVENTS);
+    keym.set_str(key_str);
+
+    foreach(uint64_t event, req_info.event_notifications) {
+      sprintf(numbuf, "%llu", (Llu)event);
+      datam.set_str(numbuf);
+      ret = cursorp->put(&keym, &datam, DB_KEYLAST);
+      HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+    }
+
+    // Store request return vals
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_RET_VAL);
+    keym.set_str(key_str);
+    data.set_data((void*)req_info.ret_val.base);
+    data.set_size(req_info.ret_val.size);
+    ret = m_state_db->put(txn, &keym, &data, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
+    // Store request type & state under /SESSIONS/id/REQS/req_id/TS/
+    // Store type and state in one 32 bit int string to save space
+    uint32_t type_state = (req_info.type << 16) | (req_info.state);
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_TYPE_STATE);
+    keym.set_str(key_str);
+    sprintf(numbuf, "%lu", (Lu)type_state);
+    datam.set_str(numbuf);
+    ret = m_state_db->put(txn, &keym, &datam, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT <<"exitting add_session_req txn="<< txn <<" session id="<< id
+               << " request id=" << req_id << HT_END;
+}
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::update_session_req_state(DbTxn *txn, uint64_t id, uint64_t req_id,
+                                               uint32_t req_state)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  char numbuf[17];
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+
+  HT_DEBUG_OUT << "update_session_req_state txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << " req state=" << req_state << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+
+    // Fetch request type & state
+    uint32_t type_state;
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_TYPE_STATE);
+    keym.set_str(key_str);
+    m_state_db->cursor(txn, &cursorp, 0);
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_SESSION_ATTR_NOT_FOUND);
+    type_state = (uint32_t)strtoul(datam.get_str(), 0, 0);
+    // Update request state & store
+    type_state = (type_state & SESSION_REQ_TYPE_MASK) | req_state;
+    sprintf(numbuf, "%lu", (Lu)type_state);
+    datam.set_str(numbuf);
+    ret = cursorp->put(&keym, &datam, DB_CURRENT);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT << "exitting update_session_req_state txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << " req state=" << req_state << HT_END;
+}
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::set_session_req_ret_val(DbTxn *txn, uint64_t id, uint64_t req_id,
+                                              StaticBuffer &ret_val)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+  Dbt data;
+
+  HT_DEBUG_OUT << "set_session_req_ret_val txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+    // replace existing return code
+    m_state_db->cursor(txn, &cursorp, 0);
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_RET_VAL);
+    keym.set_str(key_str);
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    data.set_data((void*)ret_val.base);
+    data.set_size(ret_val.size);
+    ret += cursorp->put(&keym, &data, DB_CURRENT);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT << "exitting set_session_req_ret_val txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+}
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::add_session_req_event(DbTxn *txn, uint64_t id, uint64_t req_id,
+                                            uint64_t event_id)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  char numbuf[17];
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+
+  HT_DEBUG_OUT << "add_session_req_event txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << " event_id=" << event_id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+
+    m_state_db->cursor(txn, &cursorp, 0);
+    // Store event for this request
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_EVENTS);
+    keym.set_str(key_str);
+    sprintf(numbuf, "%llu", (Llu)event_id);
+    datam.set_str(numbuf);
+    ret = cursorp->put(&keym, &datam, DB_KEYLAST);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT << "exitting add_session_req_event txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << " event_id=" << event_id << HT_END;
+}
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::add_session_req_events(DbTxn *txn, uint64_t id, uint64_t req_id,
+                                             vector<uint64_t> event_ids)
+{
+  int ret=0;
+  DbtManaged  keym, datam;
+  String key_str;
+  char numbuf[17];
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+  uint64_t event_id;
+
+  HT_DEBUG_OUT << "add_session_req_events txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+
+    m_state_db->cursor(txn, &cursorp, 0);
+    // Store each event for this request
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_EVENTS);
+    keym.set_str(key_str);
+    foreach (event_id, event_ids) {
+      sprintf(numbuf, "%llu", (Llu)event_id);
+      datam.set_str(numbuf);
+      ret += cursorp->put(&keym, &datam, DB_KEYLAST);
+    }
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT << "exitting add_session_req_events txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+}
+
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::delete_session_req_event(DbTxn *txn, uint64_t id, uint64_t req_id,
+                                            uint64_t event_id)
+{
+  int ret=0;
+  DbtManaged  keym, datam;
+  String key_str;
+  char numbuf[17];
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+
+  HT_DEBUG_OUT << "delete_session_req_event txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << " event_id=" << event_id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+
+    m_state_db->cursor(txn, &cursorp, 0);
+    // Delete event for this request
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_EVENTS);
+    keym.set_str(key_str);
+    sprintf(numbuf, "%llu", (Llu)event_id);
+    datam.set_str(numbuf);
+    ret = cursorp->get(&keym, &datam, DB_GET_BOTH);
+    ret += cursorp->del(0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT << "exitting delete_session_req_event txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << " event_id=" << event_id << HT_END;
+}
+
+/**
+ * Assumes caller has created cursorp and will close it
+ */
+void
+BerkeleyDbFilesystem::delete_session_req(DbTxn *txn, Dbc *cursorp, uint64_t id,
+    uint64_t req_id)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  char numbuf[17];
+
+  HT_DEBUG_OUT << "delete_session_req txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+  try {
+    // Delete request id under /SESSIONS/id/REQS/
+    String session_reqs_dir = get_session_key(id, SESSION_REQS);
+    keym.set_str(session_reqs_dir);
+    sprintf(numbuf, "%llu", (Llu)req_id);
+    datam.set_str(numbuf);
+
+    ret = cursorp->get(&keym, &datam, DB_GET_BOTH);
+    ret += cursorp->del(0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
+    // Delete request arguments
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_ARGS);
+    keym.set_str(key_str);
+    ret = m_state_db->del(txn, &keym, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
+    // Delete events for this request
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_EVENTS);
+    keym.set_str(key_str);
+    m_state_db->del(txn, &keym, 0);
+
+    // Delete request return values
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_RET_VAL);
+    keym.set_str(key_str);
+    ret = m_state_db->del(txn, &keym, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
+    // Delete request type & state under /SESSIONS/id/REQS/req_id/TS/
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_TYPE_STATE);
+    keym.set_str(key_str);
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    ret += cursorp->del(0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT << "exitting delete_session_req txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+}
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::delete_lesser_session_reqs(DbTxn *txn, uint64_t id, uint64_t req_id)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+  vector<uint64_t> del_reqs;
+  uint64_t cur_req_id;
+
+  HT_DEBUG_OUT << "delete_lesser_session_reqs txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+
+    // Store list of req ids < req_id to delete under /SESSIONS/id/REQS/
+    m_state_db->cursor(txn, &cursorp, 0);
+    String session_reqs_dir = get_session_key(id, SESSION_REQS);
+    keym.set_str(session_reqs_dir);
+
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    while(ret != DB_NOTFOUND) {
+      cur_req_id =  strtoull((const char *)datam.get_data(), 0, 0);
+      if (cur_req_id < req_id)
+        del_reqs.push_back(cur_req_id);
+      ret = cursorp->get(&keym, &datam, DB_NEXT_DUP);
+    }
+
+    // delete requests < req_id
+    foreach(cur_req_id, del_reqs)
+      delete_session_req(txn, cursorp, id, cur_req_id);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+  HT_DEBUG_OUT << "exitting delete_lesser_session_reqs txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+}
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::delete_all_session_reqs(DbTxn *txn, uint64_t id)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+  vector<uint64_t> del_reqs;
+  uint64_t cur_req_id;
+
+  HT_DEBUG_OUT << "delete_all_session_reqs txn="<< txn <<" session id="<< id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+
+    // Store all req_ids under /SESSIONS/id/REQS/
+    m_state_db->cursor(txn, &cursorp, 0);
+    String session_reqs_dir = get_session_key(id, SESSION_REQS);
+    keym.set_str(session_reqs_dir);
+
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    while(ret != DB_NOTFOUND) {
+      cur_req_id =  strtoull((const char *)datam.get_data(), 0, 0);
+      del_reqs.push_back(cur_req_id);
+      ret = cursorp->get(&keym, &datam, DB_NEXT_DUP);
+    }
+
+    // delete requests
+    foreach(cur_req_id, del_reqs)
+      delete_session_req(txn, cursorp, id, cur_req_id);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+  HT_DEBUG_OUT << "exitting delete_all_session_reqs txn="<< txn <<" session id="<< id
+               << HT_END;
+}
+
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::get_session_req(DbTxn *txn, Dbc *cursorp, uint64_t id, uint64_t req_id,
+                                      ReqInfo &req_info)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  uint32_t type_state;
+  uint8_t *buffer;
+
+  HT_DEBUG_OUT << "get_session_req txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+
+    // Read in request arguments
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_ARGS);
+    keym.set_str(key_str);
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_SESSION_ATTR_NOT_FOUND);
+    // allocate buffer for return vals and hand it off to the StaticBuffer in req_info
+    buffer = new uint8_t[datam.get_size()];
+    memcpy(buffer , (uint8_t *)datam.get_data(), datam.get_size());
+    req_info.args.set(buffer, datam.get_size(), true);
+
+    // Read in events for this request
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_EVENTS);
+    keym.set_str(key_str);
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    while(ret != DB_NOTFOUND) {
+      req_info.event_notifications.push_back(strtoull((const char *)datam.get_data(), 0, 0));
+      ret = cursorp->get(&keym, &datam, DB_NEXT_DUP);
+    }
+
+    // Read in request return values
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_RET_VAL);
+    keym.set_str(key_str);
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_SESSION_ATTR_NOT_FOUND);
+    // allocate buffer for return vals and hand it off to the StaticBuffer in req_info
+    buffer = new uint8_t[datam.get_size()];
+    memcpy(buffer, (uint8_t *)datam.get_data(), datam.get_size());
+    req_info.ret_val.set(buffer , datam.get_size(), true);
+
+    // Read in request type & state under /SESSIONS/id/REQS/req_id/TS/
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_TYPE_STATE);
+    keym.set_str(key_str);
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_SESSION_ATTR_NOT_FOUND);
+    type_state = (uint32_t)strtoul(datam.get_str(), 0, 0);
+    req_info.type = (type_state >> 16);
+    req_info.state = type_state & SESSION_REQ_STATE_MASK;
+
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+  HT_DEBUG_OUT << "get_session_req txn="<< txn <<" session id="<< id
+               << " req id=" << req_id << HT_END;
+}
+/**
+ *
+ */
+void
+BerkeleyDbFilesystem::get_all_session_reqs(DbTxn *txn, uint64_t id, ReqMap &reqs)
+{
+  int ret;
+  DbtManaged  keym, datam;
+  String key_str;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+  vector<uint64_t> req_ids;
+  uint64_t cur_req_id;
+  ReqInfo req_info;
+
+  HT_DEBUG_OUT << "get_all_session_reqs txn="<< txn <<" session id="<< id << HT_END;
+  try {
+    HT_EXPECT(session_exists(txn, id), HYPERSPACE_STATEDB_SESSION_NOT_EXISTS);
+
+    // Store all req_ids under /SESSIONS/id/REQS/
+    m_state_db->cursor(txn, &cursorp, 0);
+    String session_reqs_dir = get_session_key(id, SESSION_REQS);
+    keym.set_str(session_reqs_dir);
+
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    while(ret != DB_NOTFOUND) {
+      req_ids.push_back(strtoull((const char *)datam.get_data(), 0, 0));
+      ret = cursorp->get(&keym, &datam, DB_NEXT_DUP);
+    }
+
+    // get info for each request
+    foreach(cur_req_id, req_ids) {
+      get_session_req(txn, cursorp, id, cur_req_id, req_info);
+      reqs[cur_req_id] = req_info;
+    }
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+  HT_DEBUG_OUT << "exitting get_all_session_reqs txn="<< txn <<" session id="<< id << HT_END;
+}
+/**
+ *
+ */
 void
 BerkeleyDbFilesystem::add_session_handle(DbTxn *txn, uint64_t id, uint64_t handle_id)
 {
@@ -1379,6 +1938,7 @@ BerkeleyDbFilesystem::add_session_handle(DbTxn *txn, uint64_t id, uint64_t handl
   String key_str;
   char numbuf[17];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT << "add_session_handle txn="<< txn <<" session id="<< id
                << " handle id=" << handle_id << HT_END;
@@ -1393,13 +1953,9 @@ BerkeleyDbFilesystem::add_session_handle(DbTxn *txn, uint64_t id, uint64_t handl
     m_state_db->cursor(txn, &cursorp, 0);
     ret = cursorp->put(&keym, &datam, DB_KEYLAST);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1419,6 +1975,7 @@ BerkeleyDbFilesystem::get_session_handles(DbTxn *txn, uint64_t id, vector<uint64
   DbtManaged  keym, datam;
   String key_str;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"get_session_handles txn="<< txn <<" session id="<< id << HT_END;
 
@@ -1434,13 +1991,9 @@ BerkeleyDbFilesystem::get_session_handles(DbTxn *txn, uint64_t id, vector<uint64
       handles.push_back(strtoul((const char *)datam.get_data(), 0, 0));
       ret = cursorp->get(&keym, &datam, DB_NEXT_DUP);
     }
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1459,7 +2012,8 @@ BerkeleyDbFilesystem::delete_session_handle(DbTxn *txn, uint64_t id, uint64_t ha
   int ret;
   DbtManaged keym, datam;
   String key_str;
-  Dbc *cursorp;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   char numbuf[17];
   bool deleted = false;
 
@@ -1483,14 +2037,9 @@ BerkeleyDbFilesystem::delete_session_handle(DbTxn *txn, uint64_t id, uint64_t ha
       HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
       deleted = true;
     }
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1510,6 +2059,7 @@ BerkeleyDbFilesystem::session_exists(DbTxn *txn, uint64_t id)
 {
   DbtManaged keym, datam;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   bool exists = true;
   char numbuf[16];
 
@@ -1527,13 +2077,9 @@ BerkeleyDbFilesystem::session_exists(DbTxn *txn, uint64_t id)
     if(cursorp->get(&keym, &datam, DB_GET_BOTH) == DB_NOTFOUND) {
       exists = false;
     }
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if (cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1557,6 +2103,7 @@ BerkeleyDbFilesystem::set_session_name(DbTxn *txn, uint64_t id, const String &na
   DbtManaged keym, datam;
   String key_str;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"set_session_name txn="<< txn <<" name='"<< name << "' id="<< id << HT_END;
   try {
@@ -1573,13 +2120,9 @@ BerkeleyDbFilesystem::set_session_name(DbTxn *txn, uint64_t id, const String &na
       ret = cursorp->put(&keym, &datam, DB_CURRENT);
 
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1599,6 +2142,7 @@ BerkeleyDbFilesystem::get_session_name(DbTxn *txn, uint64_t id)
   DbtManaged  keym, datam;
   String key_str, name;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"get_session_name txn="<< txn <<" session id="<< id << HT_END;
 
@@ -1616,13 +2160,9 @@ BerkeleyDbFilesystem::get_session_name(DbTxn *txn, uint64_t id)
       name = "";
     else
       name = datam.get_str();
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1640,7 +2180,7 @@ BerkeleyDbFilesystem::get_session_name(DbTxn *txn, uint64_t id)
 void
 BerkeleyDbFilesystem::create_handle(DbTxn *txn, uint64_t id, String node_name,
     uint32_t open_flags, uint32_t event_mask, uint64_t session_id,
-    bool locked)
+    bool locked, uint32_t del_state)
 {
   int ret;
   DbtManaged keym, datam;
@@ -1648,10 +2188,12 @@ BerkeleyDbFilesystem::create_handle(DbTxn *txn, uint64_t id, String node_name,
   char numbuf[17];
   String buf;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"create_handle txn="<< txn <<" id="<< id << " node='"<< node_name
                << "' open_flags=" << open_flags << " event_mask="<< event_mask
-               << " session_id=" << session_id << " locked=" << locked << HT_END;
+               << " session_id=" << session_id << " locked=" << locked
+               << " del_state=" << del_state << HT_END;
   try {
 
     HT_EXPECT(!handle_exists(txn, id), HYPERSPACE_STATEDB_HANDLE_EXISTS);
@@ -1663,8 +2205,6 @@ BerkeleyDbFilesystem::create_handle(DbTxn *txn, uint64_t id, String node_name,
 
     m_state_db->cursor(txn, &cursorp, 0);
     ret = cursorp->put(&keym, &datam, DB_KEYLAST);
-    cursorp->close();
-    cursorp = 0;
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
 
     // Store handle node name
@@ -1679,6 +2219,15 @@ BerkeleyDbFilesystem::create_handle(DbTxn *txn, uint64_t id, String node_name,
     key_str = get_handle_key(id, HANDLE_OPEN_FLAGS);
     keym.set_str(key_str);
     sprintf(numbuf, "%lu", (Lu)open_flags);
+    datam.set_str(numbuf);
+
+    ret = m_state_db->put(txn, &keym, &datam, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
+    // Store handle deletion state
+    key_str = get_handle_key(id, HANDLE_DEL_STATE);
+    keym.set_str(key_str);
+    sprintf(numbuf, "%lu", (Lu)del_state);
     datam.set_str(numbuf);
 
     ret = m_state_db->put(txn, &keym, &datam, 0);
@@ -1716,8 +2265,6 @@ BerkeleyDbFilesystem::create_handle(DbTxn *txn, uint64_t id, String node_name,
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1726,7 +2273,8 @@ BerkeleyDbFilesystem::create_handle(DbTxn *txn, uint64_t id, String node_name,
 
   HT_DEBUG_OUT <<"exitting create_handle txn="<< txn <<" id="<< id << " node='"<< node_name
                << "' open_flags=" << open_flags << " event_mask="<< event_mask
-               << " session_id=" << session_id << " locked=" << locked << HT_END;
+               << " session_id=" << session_id << " locked=" << locked
+               << "del_state=" << del_state << HT_END;
 }
 
 /**
@@ -1740,6 +2288,7 @@ BerkeleyDbFilesystem::delete_handle(DbTxn *txn, uint64_t id)
   String key_str;
   char numbuf[16];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"delete_handle txn="<< txn <<" handle id="<< id << HT_END;
   try {
@@ -1773,6 +2322,13 @@ BerkeleyDbFilesystem::delete_handle(DbTxn *txn, uint64_t id)
     ret = m_state_db->del(txn, &keym, 0);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
 
+    // Delete handle deletion state
+    key_str = get_handle_key(id, HANDLE_DEL_STATE);
+    keym.set_str(key_str);
+
+    ret = m_state_db->del(txn, &keym, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
     // Delete handle node name
     key_str = get_handle_key(id, HANDLE_NODE_NAME);
     keym.set_str(key_str);
@@ -1792,14 +2348,9 @@ BerkeleyDbFilesystem::delete_handle(DbTxn *txn, uint64_t id)
     ret = cursorp->del(0);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
 
-    cursorp->close();
-    cursorp = 0;
-
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1814,12 +2365,57 @@ BerkeleyDbFilesystem::delete_handle(DbTxn *txn, uint64_t id)
  *
  */
 void
+BerkeleyDbFilesystem::set_handle_del_state(DbTxn *txn, uint64_t id, uint32_t del_state)
+{
+  DbtManaged keym, datam;
+  char numbuf[17];
+  int ret;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
+  String key_str;
+
+  HT_DEBUG_OUT <<"set_handle_del_state txn="<< txn <<" handle id="
+               << id << " del_state=" << del_state << HT_END;
+  try {
+    HT_EXPECT(handle_exists(txn, id), HYPERSPACE_STATEDB_HANDLE_NOT_EXISTS);
+    m_state_db->cursor(txn, &cursorp, 0);
+
+    // Replace existing open flag
+    key_str = get_handle_key(id, HANDLE_DEL_STATE);
+    keym.set_str(key_str);
+
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_HANDLE_ATTR_NOT_FOUND);
+
+    sprintf(numbuf, "%lu", (Lu)del_state);
+    datam.set_str(numbuf);
+
+    ret = cursorp->put(&keym, &datam, DB_CURRENT);
+    HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT <<"exitting set_handle_del_state txn="<< txn <<" handle id="
+               << id << " del_state=" << del_state << HT_END;
+
+}
+/**
+ *
+ */
+void
 BerkeleyDbFilesystem::set_handle_open_flags(DbTxn *txn, uint64_t id, uint32_t open_flags)
 {
   DbtManaged keym, datam;
   char numbuf[17];
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"set_handle_open_flags txn="<< txn <<" handle id="
@@ -1840,14 +2436,9 @@ BerkeleyDbFilesystem::set_handle_open_flags(DbTxn *txn, uint64_t id, uint32_t op
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1869,6 +2460,7 @@ BerkeleyDbFilesystem::set_handle_event_mask(DbTxn *txn, uint64_t id, uint32_t ev
   char numbuf[17];
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"set_handle_event_mask txn="<< txn <<" handle id="
@@ -1889,14 +2481,9 @@ BerkeleyDbFilesystem::set_handle_event_mask(DbTxn *txn, uint64_t id, uint32_t ev
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1917,6 +2504,7 @@ BerkeleyDbFilesystem::get_handle_event_mask(DbTxn *txn, uint64_t id)
   DbtManaged keym, datam;
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
   uint32_t event_mask;
 
@@ -1934,13 +2522,9 @@ BerkeleyDbFilesystem::get_handle_event_mask(DbTxn *txn, uint64_t id)
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_HANDLE_ATTR_NOT_FOUND);
     event_mask = (uint32_t)strtoull(datam.get_str(), 0, 0);
 
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -1962,6 +2546,7 @@ BerkeleyDbFilesystem::set_handle_node(DbTxn *txn, uint64_t id, const String &nod
   DbtManaged keym, datam;
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"set_handle_node_name txn="<< txn <<" handle id=" << id
@@ -1980,14 +2565,9 @@ BerkeleyDbFilesystem::set_handle_node(DbTxn *txn, uint64_t id, const String &nod
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2009,6 +2589,7 @@ BerkeleyDbFilesystem::set_handle_locked(DbTxn *txn, uint64_t id, bool locked)
   int ret;
   String buf;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"set_handle_locked txn="<< txn <<" handle id=" << id
@@ -2030,14 +2611,9 @@ BerkeleyDbFilesystem::set_handle_locked(DbTxn *txn, uint64_t id, bool locked)
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2055,6 +2631,7 @@ BerkeleyDbFilesystem::handle_exists(DbTxn *txn, uint64_t id)
 {
   DbtManaged keym, datam;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   bool exists = true;
   char numbuf[17];
 
@@ -2072,13 +2649,9 @@ BerkeleyDbFilesystem::handle_exists(DbTxn *txn, uint64_t id)
     if(cursorp->get(&keym, &datam, DB_GET_BOTH) == DB_NOTFOUND) {
       exists = false;
     }
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if (cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2178,6 +2751,44 @@ BerkeleyDbFilesystem::get_handle_node(DbTxn *txn, uint64_t id, String &node_name
  *
  */
 uint32_t
+BerkeleyDbFilesystem::get_handle_del_state(DbTxn *txn, uint64_t id)
+{
+  DbtManaged keym, datam;
+  int ret;
+  String key_str;
+  int del_state;
+
+  HT_DEBUG_OUT <<"get_handle_del_state txn="<< txn <<" handle id=" << id << HT_END;
+
+  try {
+    HT_EXPECT(handle_exists(txn, id), HYPERSPACE_STATEDB_HANDLE_NOT_EXISTS);
+
+    // Get existing deletion state
+    key_str = get_handle_key(id, HANDLE_DEL_STATE);
+    keym.set_str(key_str);
+
+    ret = m_state_db->get(txn, &keym, &datam, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_HANDLE_ATTR_NOT_FOUND);
+
+    del_state = (uint32_t)strtoul(datam.get_str(), 0, 0);
+  }
+  catch (DbException &e) {
+    HT_ERRORF("Berkeley DB error: %s", e.what());
+    if (e.get_errno() == DB_LOCK_DEADLOCK)
+      HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
+    else
+      HT_THROW(HYPERSPACE_STATEDB_ERROR, e.what());
+  }
+
+  HT_DEBUG_OUT <<"exitting get_handle_del_state txn="<< txn <<" handle id="
+               << id << " del_state=" << del_state << HT_END;
+  return del_state;
+}
+
+/**
+ *
+ */
+uint32_t
 BerkeleyDbFilesystem::get_handle_open_flags(DbTxn *txn, uint64_t id)
 {
   DbtManaged keym, datam;
@@ -2266,6 +2877,7 @@ BerkeleyDbFilesystem::create_node(DbTxn *txn, const String &name,
   DbtManaged keym, datam;
   String key_str;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String buf;
   char numbuf[17];
 
@@ -2284,8 +2896,6 @@ BerkeleyDbFilesystem::create_node(DbTxn *txn, const String &name,
 
     m_state_db->cursor(txn, &cursorp, 0);
     ret = cursorp->put(&keym, &datam, DB_KEYLAST);
-    cursorp->close();
-    cursorp = 0;
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
 
     // Store node ephemeral
@@ -2330,8 +2940,6 @@ BerkeleyDbFilesystem::create_node(DbTxn *txn, const String &name,
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2356,6 +2964,7 @@ BerkeleyDbFilesystem::set_node_lock_generation(DbTxn *txn, const String &name,
   char numbuf[17];
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"set_node_lock_generation txn="<< txn <<" node=" << name
@@ -2376,14 +2985,9 @@ BerkeleyDbFilesystem::set_node_lock_generation(DbTxn *txn, const String &name,
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2405,6 +3009,7 @@ BerkeleyDbFilesystem::incr_node_lock_generation(DbTxn *txn, const String &name)
   int ret;
   uint64_t lock_generation=0;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"incr_node_lock_generation txn="<< txn <<" node=" << name << HT_END;
@@ -2427,14 +3032,9 @@ BerkeleyDbFilesystem::incr_node_lock_generation(DbTxn *txn, const String &name)
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2458,6 +3058,7 @@ BerkeleyDbFilesystem::set_node_ephemeral(DbTxn *txn, const String &name,
   int ret;
   String buf;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"set_node_ephemeral txn="<< txn <<" node_name=" << name
@@ -2479,14 +3080,9 @@ BerkeleyDbFilesystem::set_node_ephemeral(DbTxn *txn, const String &name,
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2553,6 +3149,7 @@ BerkeleyDbFilesystem::set_node_cur_lock_mode(DbTxn *txn, const String &name,
   char numbuf[16];
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"set_node_cur_lock_mode txn="<< txn <<" node=" << name
@@ -2573,14 +3170,9 @@ BerkeleyDbFilesystem::set_node_cur_lock_mode(DbTxn *txn, const String &name,
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2600,6 +3192,7 @@ BerkeleyDbFilesystem::get_node_cur_lock_mode(DbTxn *txn, const String &name)
   DbtManaged keym, datam;
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
   uint32_t lock_mode;
 
@@ -2617,14 +3210,9 @@ BerkeleyDbFilesystem::get_node_cur_lock_mode(DbTxn *txn, const String &name)
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_NODE_ATTR_NOT_FOUND);
 
     lock_mode = (uint32_t) strtoull(datam.get_str(), 0, 0);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2647,6 +3235,7 @@ BerkeleyDbFilesystem::set_node_exclusive_lock_handle(DbTxn *txn,
   char numbuf[17];
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
 
   HT_DEBUG_OUT <<"set_node_exclusive_lock_handle  txn="<< txn <<" node=" << name
@@ -2667,14 +3256,9 @@ BerkeleyDbFilesystem::set_node_exclusive_lock_handle(DbTxn *txn,
 
     ret = cursorp->put(&keym, &datam, DB_CURRENT);
     HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2693,6 +3277,7 @@ BerkeleyDbFilesystem::get_node_exclusive_lock_handle(DbTxn *txn, const String &n
   DbtManaged keym, datam;
   int ret;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   String key_str;
   uint64_t exclusive_lock_handle=0;
 
@@ -2710,14 +3295,9 @@ BerkeleyDbFilesystem::get_node_exclusive_lock_handle(DbTxn *txn, const String &n
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_NODE_ATTR_NOT_FOUND);
 
     exclusive_lock_handle = (uint64_t)strtoull(datam.get_str(), 0, 0);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2742,6 +3322,7 @@ BerkeleyDbFilesystem::add_node_handle(DbTxn *txn, const String &name,
   String key_str;
   char numbuf[16];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"add_node_handle txn="<< txn <<" node="<< name << " handle id=" << handle_id
                << HT_END;
@@ -2757,13 +3338,9 @@ BerkeleyDbFilesystem::add_node_handle(DbTxn *txn, const String &name,
     m_state_db->cursor(txn, &cursorp, 0);
     ret = cursorp->put(&keym, &datam, DB_KEYLAST);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2786,10 +3363,12 @@ BerkeleyDbFilesystem::get_node_event_notification_map(DbTxn *txn, const String &
   uint64_t handle, session;
   uint32_t mask;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   bool has_notifications = false;
 
   HT_DEBUG_OUT <<"get_node_event_notification_map txn="<< txn <<" node="<< name << HT_END;
 
+  handles_to_sessions.clear();
   try {
     HT_EXPECT(node_exists(txn, name), HYPERSPACE_STATEDB_NODE_NOT_EXISTS);
 
@@ -2811,14 +3390,9 @@ BerkeleyDbFilesystem::get_node_event_notification_map(DbTxn *txn, const String &
       }
       ret = cursorp->get(&keym, &datam, DB_NEXT_DUP);
     }
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2840,7 +3414,8 @@ BerkeleyDbFilesystem::delete_node_handle(DbTxn *txn, const String &name,
   int ret;
   DbtManaged keym, datam;
   String key_str;
-  Dbc *cursorp;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   char numbuf[17];
 
   HT_DEBUG_OUT <<"delete_node_handle txn="<< txn <<" node="<< name
@@ -2859,14 +3434,9 @@ BerkeleyDbFilesystem::delete_node_handle(DbTxn *txn, const String &name,
 
     ret = cursorp->del(0);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2890,6 +3460,7 @@ BerkeleyDbFilesystem::add_node_pending_lock_request(DbTxn *txn,
   String key_str;
   char numbuf[17];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"add_node_pending_lock_request txn="<< txn <<" node=" << name
                << " handle id=" << handle_id << " mode=" << mode << HT_END;
@@ -2904,8 +3475,6 @@ BerkeleyDbFilesystem::add_node_pending_lock_request(DbTxn *txn,
     m_state_db->cursor(txn, &cursorp, 0);
     ret = cursorp->put(&keym, &datam, DB_KEYLAST);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
-    cursorp->close();
-    cursorp = 0;
 
     key_str = get_node_pending_lock_request_key(name, handle_id);
     keym.set_str(key_str);
@@ -2917,8 +3486,6 @@ BerkeleyDbFilesystem::add_node_pending_lock_request(DbTxn *txn,
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2941,6 +3508,7 @@ BerkeleyDbFilesystem::node_has_pending_lock_request(DbTxn *txn, const String &na
   String key_str;
   bool has_pending_lock_request = false;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   uint64_t handle_id;
 
   HT_DEBUG_OUT << "node_has_pending_lock_request txn=" << txn << " node=" << name << HT_END;
@@ -2955,8 +3523,6 @@ BerkeleyDbFilesystem::node_has_pending_lock_request(DbTxn *txn, const String &na
     ret = cursorp->get(&keym, &datam, DB_SET);
 
     HT_EXPECT(ret == 0 || ret == DB_NOTFOUND, HYPERSPACE_STATEDB_ERROR);
-    cursorp->close();
-    cursorp = 0;
 
     if (ret == 0) {
       // get lock request mode
@@ -2970,8 +3536,6 @@ BerkeleyDbFilesystem::node_has_pending_lock_request(DbTxn *txn, const String &na
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -2997,6 +3561,7 @@ BerkeleyDbFilesystem::get_node_pending_lock_request(DbTxn *txn, const String &na
   String key_str;
   bool has_pending_lock_request = false;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   uint64_t handle_id;
 
   HT_DEBUG_OUT << "get_node_pending_lock_request txn=" << txn << " node=" << name << HT_END;
@@ -3011,8 +3576,6 @@ BerkeleyDbFilesystem::get_node_pending_lock_request(DbTxn *txn, const String &na
     ret = cursorp->get(&keym, &datam, DB_SET);
 
     HT_EXPECT(ret == 0 || ret == DB_NOTFOUND, HYPERSPACE_STATEDB_ERROR);
-    cursorp->close();
-    cursorp = 0;
 
     if (ret == 0) {
       // get lock request mode
@@ -3029,8 +3592,6 @@ BerkeleyDbFilesystem::get_node_pending_lock_request(DbTxn *txn, const String &na
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3054,6 +3615,7 @@ BerkeleyDbFilesystem::delete_node_pending_lock_request(DbTxn *txn,
   String key_str;
   char numbuf[16];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"remove_node_pending_lock_request txn="<< txn <<" node=" << name
                <<" handle id=" << handle_id << HT_END;
@@ -3073,8 +3635,6 @@ BerkeleyDbFilesystem::delete_node_pending_lock_request(DbTxn *txn,
     ret = cursorp->del(0);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
 
-    cursorp->close();
-    cursorp = 0;
     //Delete pending lock request
     key_str = get_node_pending_lock_request_key(name, handle_id);
     keym.set_str(key_str);
@@ -3083,8 +3643,6 @@ BerkeleyDbFilesystem::delete_node_pending_lock_request(DbTxn *txn,
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3107,6 +3665,7 @@ BerkeleyDbFilesystem::add_node_shared_lock_handle(DbTxn *txn, const String &name
   String key_str;
   char numbuf[16];
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"add_node_shared_lock_handle txn="<< txn <<" node="<< name
       << " handle id=" << handle_id << HT_END;
@@ -3122,13 +3681,9 @@ BerkeleyDbFilesystem::add_node_shared_lock_handle(DbTxn *txn, const String &name
     m_state_db->cursor(txn, &cursorp, 0);
     ret = cursorp->put(&keym, &datam, DB_KEYLAST);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3148,6 +3703,7 @@ BerkeleyDbFilesystem::node_has_shared_lock_handles(DbTxn *txn, const String &nam
   DbtManaged  keym, datam;
   String key_str;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   bool has_shared_lock_handles=false;
 
   HT_DEBUG_OUT <<"node_has_shared_lock_handles txn="<< txn <<" node="<< name << HT_END;
@@ -3163,14 +3719,9 @@ BerkeleyDbFilesystem::node_has_shared_lock_handles(DbTxn *txn, const String &nam
 
     if (ret != DB_NOTFOUND)
       has_shared_lock_handles = true;
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3192,7 +3743,8 @@ BerkeleyDbFilesystem::delete_node_shared_lock_handle(DbTxn *txn, const String &n
   int ret;
   DbtManaged keym, datam;
   String key_str;
-  Dbc *cursorp;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   char numbuf[17];
 
   HT_DEBUG_OUT <<"remove_node_shared_lock_handle txn="<< txn <<" node="<< name
@@ -3211,14 +3763,9 @@ BerkeleyDbFilesystem::delete_node_shared_lock_handle(DbTxn *txn, const String &n
 
     ret = cursorp->del(0);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3238,6 +3785,7 @@ BerkeleyDbFilesystem::delete_node(DbTxn *txn, const String &name)
   DbtManaged keym, datam;
   String key_str;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT <<"delete_node txn="<< txn <<" node ="<< name << HT_END;
   try {
@@ -3281,15 +3829,9 @@ BerkeleyDbFilesystem::delete_node(DbTxn *txn, const String &name)
 
     ret = m_state_db->del(txn, &keym, 0);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
-
-    cursorp->close();
-    cursorp = 0;
-
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3309,6 +3851,7 @@ BerkeleyDbFilesystem::node_exists(DbTxn *txn, const String &name)
 {
   DbtManaged keym, datam;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   bool exists = true;
 
   HT_DEBUG_OUT <<"node_exists txn="<< txn << " node name="
@@ -3325,13 +3868,9 @@ BerkeleyDbFilesystem::node_exists(DbTxn *txn, const String &name)
     if(cursorp->get(&keym, &datam, DB_GET_BOTH) == DB_NOTFOUND) {
       exists = false;
     }
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if (cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3353,7 +3892,8 @@ BerkeleyDbFilesystem::get_node_handles(DbTxn *txn, const String &name,
   int ret;
   DbtManaged keym, datam;
   String key_str;
-  Dbc *cursorp;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
 
   HT_DEBUG_OUT << "get_node_handles txn=" << txn << " node=" << name << HT_END;
 
@@ -3371,14 +3911,9 @@ BerkeleyDbFilesystem::get_node_handles(DbTxn *txn, const String &name,
       handles.push_back((uint64_t)strtoull(datam.get_str(), 0, 0));
       ret = cursorp->get(&keym, &datam, DB_NEXT_DUP);
     }
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3397,7 +3932,8 @@ BerkeleyDbFilesystem::node_has_open_handles(DbTxn *txn, const String &name)
   int ret;
   DbtManaged keym, datam;
   String key_str;
-  Dbc *cursorp;
+  Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   bool has_open_handles = false;
   uint64_t open_handle;
 
@@ -3419,14 +3955,9 @@ BerkeleyDbFilesystem::node_has_open_handles(DbTxn *txn, const String &name)
                    << " at least one open_handle=" << open_handle << HT_END;
       has_open_handles = true;
     }
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else
@@ -3448,6 +3979,7 @@ BerkeleyDbFilesystem::get_next_id_i64(DbTxn *txn, int id_type, bool increment)
   int ret;
   uint64_t retval=0;
   Dbc *cursorp = 0;
+  HT_ON_SCOPE_EXIT(&close_db_cursor, &cursorp);
   char numbuf[17];
 
   HT_DEBUG_OUT <<"get_next_id_i64 txn="<< txn << " id_type=" << id_type << " increment="
@@ -3481,14 +4013,9 @@ BerkeleyDbFilesystem::get_next_id_i64(DbTxn *txn, int id_type, bool increment)
       ret = cursorp->put(&keym, &datam, DB_CURRENT);
       HT_EXPECT(ret==0, HYPERSPACE_STATEDB_ERROR);
     }
-
-    cursorp->close();
-    cursorp = 0;
   }
   catch (DbException &e) {
     HT_ERRORF("Berkeley DB error: %s", e.what());
-    if(cursorp)
-      cursorp->close();
     if (e.get_errno() == DB_LOCK_DEADLOCK)
       HT_THROW(HYPERSPACE_BERKELEYDB_DEADLOCK, e.what());
     else

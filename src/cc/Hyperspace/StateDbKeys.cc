@@ -81,6 +81,31 @@ namespace StateDbKeys {
       case(SESSION_NAME):
         key += SESSION_NAME_STR;
         break;
+      case(SESSION_REQS):
+        key += SESSION_REQS_STR;
+        break;
+      default:
+        HT_EXPECT(false, HYPERSPACE_STATEDB_BAD_KEY);
+    }
+    return key;
+  }
+
+  String get_session_req_key(uint64_t id, uint64_t req_id, uint32_t type)  {
+
+    String key = SESSIONS_STR + id + PATH_DELIM_STR + SESSION_REQ_STR + req_id + PATH_DELIM_STR;
+    switch(type) {
+      case(SESSION_REQ_ARGS):
+        key += SESSION_REQ_ARGS_STR;
+        break;
+      case(SESSION_REQ_EVENTS):
+        key += SESSION_REQ_EVENTS_STR;
+        break;
+      case(SESSION_REQ_RET_VAL):
+        key += SESSION_REQ_RET_VAL_STR;
+        break;
+      case(SESSION_REQ_TYPE_STATE):
+        key += SESSION_REQ_TYPE_STATE_STR;
+        break;
       default:
         HT_EXPECT(false, HYPERSPACE_STATEDB_BAD_KEY);
     }
@@ -95,6 +120,9 @@ namespace StateDbKeys {
         break;
       case (HANDLE_OPEN_FLAGS):
         key += HANDLE_OPEN_FLAGS_STR;
+        break;
+      case(HANDLE_DEL_STATE):
+        key += HANDLE_DEL_STATE_STR;
         break;
       case(HANDLE_EVENT_MASK):
         key += HANDLE_EVENT_MASK_STR;

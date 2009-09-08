@@ -44,6 +44,7 @@ void RequestHandlerOpen::run() {
   std::vector<Attribute> attrs;
 
   try {
+    uint64_t req_id = decode_i64(&decode_ptr, &decode_remain);
     uint32_t flags = decode_i32(&decode_ptr, &decode_remain);
     uint32_t event_mask = decode_i32(&decode_ptr, &decode_remain);
     const char *name = decode_vstr(&decode_ptr, &decode_remain);
@@ -54,7 +55,7 @@ void RequestHandlerOpen::run() {
       attr.value = decode_vstr(&decode_ptr, &decode_remain, &attr.value_len);
       attrs.push_back(attr);
     }
-    m_master->open(&cb, m_session_id, name, flags, event_mask, attrs);
+    m_master->open(&cb, m_session_id, req_id, name, flags, event_mask, attrs);
   }
   catch (Exception &e) {
     HT_ERROR_OUT << e << HT_END;

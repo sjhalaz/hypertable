@@ -54,7 +54,7 @@ void RequestHandlerRenewSession::run() {
       error = Error::OK;
     }
     else
-      error = m_master->renew_session_lease(m_session_id);
+      error = m_master->renew_session_lease(m_session_id, m_oldest_outstanding_req);
 
     if (error == Error::HYPERSPACE_EXPIRED_SESSION) {
       HT_INFOF("Session handle %llu expired", (Llu)m_session_id);

@@ -73,10 +73,11 @@ void ServerKeepaliveHandler::handle(Hypertable::EventPtr &event) {
       case Protocol::COMMAND_KEEPALIVE: {
           uint64_t session_id = decode_i64(&decode_ptr, &decode_remain);
           uint64_t last_known_event = decode_i64(&decode_ptr, &decode_remain);
+          uint64_t oldest_outstanding_req = decode_i64(&decode_ptr, &decode_remain);
           bool shutdown = decode_bool(&decode_ptr, &decode_remain);
 
           m_app_queue_ptr->add( new RequestHandlerRenewSession(m_comm,
-              m_master, session_id, last_known_event, shutdown, event,
+              m_master, session_id, last_known_event, oldest_outstanding_req, shutdown, event,
               &m_send_addr ) );
         }
         break;

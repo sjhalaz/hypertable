@@ -38,6 +38,7 @@
 #include "Common/Properties.h"
 #include "Common/String.h"
 #include "Common/HashMap.h"
+#include "Common/ScopeGuard.h"
 
 #include "ClientKeepaliveHandler.h"
 #include "HandleCallback.h"
@@ -442,6 +443,7 @@ namespace Hyperspace {
     int send_message(CommBufPtr &, DispatchHandler *, Timer *timer);
     void normalize_name(const std::string &name, std::string &normal);
     uint64_t open(ClientHandleStatePtr &, CommBufPtr &, Timer *timer);
+    void request_done(uint64_t req_id);
 
     Mutex                     m_mutex;
     boost::condition          m_cond;

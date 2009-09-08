@@ -88,6 +88,10 @@ bool Session::remove_callback(SessionCallback *cb)
   return m_callbacks.erase(cb->get_id());
 }
 
+void Session::request_done(uint64_t req_id) {
+  m_keepalive_handler_ptr->remove_outstanding_req(req_id);
+}
+
 uint64_t
 Session::open(ClientHandleStatePtr &handle_state, CommBufPtr &cbuf_ptr,
               Timer *timer) {
@@ -107,8 +111,9 @@ Session::open(ClientHandleStatePtr &handle_state, CommBufPtr &cbuf_ptr,
     handle_state->lock_mode = 0;
 
  try_again:
-  if (!wait_for_safe())
+  if (!wait_for_safe()) {
     return Error::HYPERSPACE_EXPIRED_SESSION;
+  }
 
   int error = send_message(cbuf_ptr, &sync_handler, timer);
   if (error == Error::OK) {
@@ -146,13 +151,15 @@ Session::open(const std::string &name, uint32_t flags,
               HandleCallbackPtr &callback, Timer *timer) {
   ClientHandleStatePtr handle_state(new ClientHandleState());
   std::vector<Attribute> empty_attrs;
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
 
   handle_state->open_flags = flags;
   handle_state->event_mask = (callback) ? callback->get_event_mask() : 0;
   handle_state->callback = callback;
   normalize_name(name, handle_state->normal_name);
 
-  CommBufPtr cbuf_ptr(Protocol::create_open_request(handle_state->normal_name,
+  CommBufPtr cbuf_ptr(Protocol::create_open_request(req_id, handle_state->normal_name,
                       flags, callback, empty_attrs));
 
   return open(handle_state, cbuf_ptr, timer);
@@ -169,8 +176,10 @@ Session::create(const std::string &name, uint32_t flags,
   handle_state->event_mask = (callback) ? callback->get_event_mask() : 0;
   handle_state->callback = callback;
   normalize_name(name, handle_state->normal_name);
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
 
-  CommBufPtr cbuf_ptr(Protocol::create_open_request(handle_state->normal_name,
+  CommBufPtr cbuf_ptr(Protocol::create_open_request(req_id, handle_state->normal_name,
                       handle_state->open_flags, callback, init_attrs));
 
   return open(handle_state, cbuf_ptr, timer);
@@ -183,7 +192,9 @@ Session::create(const std::string &name, uint32_t flags,
 void Session::close(uint64_t handle, Timer *timer) {
   DispatchHandlerSynchronizer sync_handler;
   Hypertable::EventPtr event_ptr;
-  CommBufPtr cbuf_ptr(Protocol::create_close_request(handle));
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
+  CommBufPtr cbuf_ptr(Protocol::create_close_request(req_id, handle));
 
  try_again:
   if (!wait_for_safe())
@@ -209,10 +220,11 @@ void Session::mkdir(const std::string &name, Timer *timer) {
   DispatchHandlerSynchronizer sync_handler;
   Hypertable::EventPtr event_ptr;
   String normal_name;
-
   normalize_name(name, normal_name);
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
 
-  CommBufPtr cbuf_ptr(Protocol::create_mkdir_request(normal_name));
+  CommBufPtr cbuf_ptr(Protocol::create_mkdir_request(req_id, normal_name));
 
  try_again:
   if (!wait_for_safe())
@@ -228,7 +240,6 @@ void Session::mkdir(const std::string &name, Timer *timer) {
     state_transition(Session::STATE_JEOPARDY);
     goto try_again;
   }
-
 }
 
 
@@ -238,8 +249,10 @@ void Session::unlink(const std::string &name, Timer *timer) {
   String normal_name;
 
   normalize_name(name, normal_name);
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
 
-  CommBufPtr cbuf_ptr(Protocol::create_delete_request(normal_name));
+  CommBufPtr cbuf_ptr(Protocol::create_delete_request(req_id, normal_name));
 
  try_again:
   if (!wait_for_safe())
@@ -247,9 +260,10 @@ void Session::unlink(const std::string &name, Timer *timer) {
 
   int error = send_message(cbuf_ptr, &sync_handler, timer);
   if (error == Error::OK) {
-    if (!sync_handler.wait_for_reply(event_ptr))
+    if (!sync_handler.wait_for_reply(event_ptr)) {
       HT_THROWF((int)Protocol::response_code(event_ptr.get()),
                 "Hyperspace 'unlink' error, name=%s", normal_name.c_str());
+    }
   }
   else {
     state_transition(Session::STATE_JEOPARDY);
@@ -297,7 +311,9 @@ void Session::attr_set(uint64_t handle, const std::string &name,
                        const void *value, size_t value_len, Timer *timer) {
   DispatchHandlerSynchronizer sync_handler;
   Hypertable::EventPtr event_ptr;
-  CommBufPtr cbuf_ptr(Protocol::create_attr_set_request(handle, name, value,
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
+  CommBufPtr cbuf_ptr(Protocol::create_attr_set_request(req_id, handle, name, value,
                       value_len));
 
  try_again:
@@ -400,7 +416,10 @@ Session::attr_exists(uint64_t handle, const std::string& name, Timer *timer)
 void Session::attr_del(uint64_t handle, const std::string &name, Timer *timer) {
   DispatchHandlerSynchronizer sync_handler;
   Hypertable::EventPtr event_ptr;
-  CommBufPtr cbuf_ptr(Protocol::create_attr_del_request(handle, name));
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
+
+  CommBufPtr cbuf_ptr(Protocol::create_attr_del_request(req_id, handle, name));
 
  try_again:
   if (!wait_for_safe())
@@ -520,7 +539,10 @@ Session::lock(uint64_t handle, uint32_t mode, LockSequencer *sequencerp,
               Timer *timer) {
   DispatchHandlerSynchronizer sync_handler;
   Hypertable::EventPtr event_ptr;
-  CommBufPtr cbuf_ptr(Protocol::create_lock_request(handle, mode, false));
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
+
+  CommBufPtr cbuf_ptr(Protocol::create_lock_request(req_id, handle, mode, false));
   ClientHandleStatePtr handle_state;
   uint32_t status = 0;
 
@@ -534,6 +556,7 @@ Session::lock(uint64_t handle, uint32_t mode, LockSequencer *sequencerp,
   if (!wait_for_safe())
     HT_THROW(Error::HYPERSPACE_EXPIRED_SESSION, "");
 
+
   {
     ScopedLock lock(handle_state->mutex);
     sequencerp->mode = mode;
@@ -543,10 +566,11 @@ Session::lock(uint64_t handle, uint32_t mode, LockSequencer *sequencerp,
 
   int error = send_message(cbuf_ptr, &sync_handler, timer);
   if (error == Error::OK) {
-    if (!sync_handler.wait_for_reply(event_ptr))
+    if (!sync_handler.wait_for_reply(event_ptr)) {
       HT_THROWF((int)Protocol::response_code(event_ptr.get()),
                 "Hyperspace 'lock' error, name='%s'",
                 handle_state->normal_name.c_str());
+      }
     else {
       ScopedLock lock(handle_state->mutex);
       const uint8_t *decode_ptr = event_ptr->payload + 4;
@@ -588,7 +612,10 @@ Session::try_lock(uint64_t handle, uint32_t mode, uint32_t *statusp,
                   LockSequencer *sequencerp, Timer *timer) {
   DispatchHandlerSynchronizer sync_handler;
   Hypertable::EventPtr event_ptr;
-  CommBufPtr cbuf_ptr(Protocol::create_lock_request(handle, mode, true));
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
+
+  CommBufPtr cbuf_ptr(Protocol::create_lock_request(req_id, handle, mode, true));
   ClientHandleStatePtr handle_state;
 
   if (!m_keepalive_handler_ptr->get_handle_state(handle, handle_state))
@@ -640,7 +667,10 @@ Session::try_lock(uint64_t handle, uint32_t mode, uint32_t *statusp,
 void Session::release(uint64_t handle, Timer *timer) {
   DispatchHandlerSynchronizer sync_handler;
   Hypertable::EventPtr event_ptr;
-  CommBufPtr cbuf_ptr(Protocol::create_release_request(handle));
+  uint64_t req_id = m_keepalive_handler_ptr->add_outstanding_req();
+  HT_ON_OBJ_SCOPE_EXIT(*this, &Session::request_done, req_id);
+
+  CommBufPtr cbuf_ptr(Protocol::create_release_request(req_id, handle));
   ClientHandleStatePtr handle_state;
 
   if (!m_keepalive_handler_ptr->get_handle_state(handle, handle_state))

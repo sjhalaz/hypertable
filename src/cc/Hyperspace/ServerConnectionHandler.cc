@@ -77,7 +77,6 @@ void ServerConnectionHandler::handle(EventPtr &event) {
              HT_THROW(Error::PROTOCOL_ERROR, "Bad session id: 0");
              handler = new RequestHandlerHandshake(m_comm, m_master_ptr.get(),
                                                    m_session_id, event);
-
           }
           break;
       case Protocol::COMMAND_OPEN:

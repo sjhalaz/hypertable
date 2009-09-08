@@ -140,6 +140,8 @@ namespace Hyperspace {
       name = name_;
     }
 
+    uint64_t get_oldest_outstanding_req() {return m_oldest_outstanding_req;}
+    void set_oldest_outstanding_req(uint64_t req_id) {m_oldest_outstanding_req = req_id;}
     friend struct LtSessionData;
 
     struct sockaddr_in addr;
@@ -152,6 +154,7 @@ namespace Hyperspace {
     bool expired;
     std::list<Notification *> notifications;
     String name;
+    uint64_t m_oldest_outstanding_req;
   };
 
   typedef boost::intrusive_ptr<SessionData> SessionDataPtr;
