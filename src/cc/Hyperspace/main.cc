@@ -43,6 +43,7 @@ extern "C" {
 #include "Config.h"
 #include "ServerConnectionHandler.h"
 #include "ServerKeepaliveHandler.h"
+#include "Global.h"
 #include "Master.h"
 
 using namespace Hyperspace;
@@ -76,6 +77,15 @@ int main(int argc, char **argv) {
 
   try {
     init_with_policy<AppPolicy>(argc, argv);
+
+    if (has("induce-failure")) {
+      if (Global::failure_inducer == 0)
+        Global::failure_inducer = new FailureInducer();
+
+      Global::failure_inducer->parse_option(get_str("induce-failure"));
+    }
+    else
+      Global::failure_inducer = 0;
 
     Comm *comm = Comm::instance();
     ConnectionManagerPtr conn_mgr = new ConnectionManager(comm);

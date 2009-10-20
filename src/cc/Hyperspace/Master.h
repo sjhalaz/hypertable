@@ -47,6 +47,7 @@
 #include "ResponseCallbackLock.h"
 #include "ResponseCallbackReaddir.h"
 #include "ServerKeepaliveHandler.h"
+#include "Global.h"
 
 namespace Hyperspace {
 

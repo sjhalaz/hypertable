@@ -30,6 +30,7 @@ Session.cc
 HsCommandInterpreter.cc
 HsHelpText.cc
 HsClientState.cc
+
 )
 
 # Hyperspace library
@@ -40,6 +41,7 @@ set(Master_SRCS
 StateDbKeys.cc
 BerkeleyDbFilesystem.cc
 Event.cc
+Global.cc
 Master.cc
 RequestHandlerMkdir.cc
 RequestHandlerDelete.cc

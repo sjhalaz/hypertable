@@ -56,12 +56,14 @@ using namespace Hypertable::Config;
 using namespace Hyperspace;
 using namespace std;
 
-#define HT_BDBTXN_BEGIN(parent_txn) \
+#define HT_BDBTXN_BEGIN(_label_) \
   do { \
-    DbTxn *txn = m_bdb_fs->start_transaction(parent_txn); \
+    DbTxn *txn = m_bdb_fs->start_transaction(); \
+    if (Global::failure_inducer)\
+      Global::failure_inducer->maybe_fail(_label_); \
     try
 
-#define HT_BDBTXN_END_CB(_cb_) \
+#define HT_BDBTXN_END_CB(_label_, _cb_) \
     catch (Exception &e) { \
       if (e.code() != Error::HYPERSPACE_BERKELEYDB_DEADLOCK) { \
         if (e.code() == Error::HYPERSPACE_BERKELEYDB_ERROR) \
@@ -78,10 +80,12 @@ using namespace std;
       continue; \
     } \
     HT_DEBUG_OUT << "end txn " << txn << HT_END; \
+    if (Global::failure_inducer)\
+      Global::failure_inducer->maybe_fail(_label_); \
     break; \
   } while (true)
 
-#define HT_BDBTXN_END(...) \
+#define HT_BDBTXN_END(_label_, ...) \
     catch (Exception &e) { \
       if (e.code() != Error::HYPERSPACE_BERKELEYDB_DEADLOCK) { \
         if (e.code() == Error::HYPERSPACE_BERKELEYDB_ERROR) \
@@ -97,6 +101,8 @@ using namespace std;
       continue; \
     } \
     HT_DEBUG_OUT << "end txn " << txn << HT_END; \
+    if (Global::failure_inducer)\
+      Global::failure_inducer->maybe_fail(_label_); \
     break; \
   } while (true)
 
@@ -233,7 +239,7 @@ uint64_t Master::create_session(struct sockaddr_in &addr) {
   uint64_t session_id = 0;
   String addr_str = InetAddr::format(addr);
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("create_session-begin") {
     // DB updates
     session_id = m_bdb_fs->get_next_id_i64(txn, SESSION_ID, true);
     m_bdb_fs->create_session(txn, session_id, addr_str);
@@ -245,7 +251,7 @@ uint64_t Master::create_session(struct sockaddr_in &addr) {
     txn->commit(0);
     HT_INFOF("created session %llu", (Llu)session_id);
   }
-  HT_BDBTXN_END(0);
+  HT_BDBTXN_END("create_session-end", 0);
 
   return session_id;
 }
@@ -298,12 +304,12 @@ void Master::initialize_session(uint64_t session_id, const String &name) {
   }
 
   // set session name in BDB and mem
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("initialize_session-begin") {
     m_bdb_fs->set_session_name(txn, session_id, name);
     txn->commit(0);
     session_data->set_name(name);
   }
-  HT_BDBTXN_END();
+  HT_BDBTXN_END("initialize_session-end", );
 
   HT_INFOF("Initialized session %llu (%s)", (Llu)session_id, name.c_str());
 }
@@ -331,12 +337,12 @@ int Master::renew_session_lease(uint64_t session_id, uint64_t oldest_outstanding
 
   if (!renewed) {
     // if renew failed then delete from BDB
-    HT_BDBTXN_BEGIN() {
+    HT_BDBTXN_BEGIN("renew_session-begin-1") {
       m_bdb_fs->expire_session(txn, session_id);
       txn->commit(0);
       commited = true;
     }
-    HT_BDBTXN_END(Error::HYPERSPACE_EXPIRED_SESSION);
+    HT_BDBTXN_END("renew_session-end-1", Error::HYPERSPACE_EXPIRED_SESSION);
 
     // Do this outside BDB txn since delete event notifications might cause a BDB txn too
     if (commited)
@@ -348,11 +354,11 @@ int Master::renew_session_lease(uint64_t session_id, uint64_t oldest_outstanding
   else {
     // if theres a new oldest outstanding req then delete complete requests
     if (oldest_outstanding_req != session_data->get_oldest_outstanding_req()) {
-      HT_BDBTXN_BEGIN() {
+      HT_BDBTXN_BEGIN("renew_session-begin-2") {
         m_bdb_fs->delete_lesser_session_reqs(txn, session_id, oldest_outstanding_req);
         txn->commit(0);
       }
-      HT_BDBTXN_END(Error::OK);
+      HT_BDBTXN_END("renew_session-end-2", Error::OK);
       session_data->set_oldest_outstanding_req(oldest_outstanding_req);
     }
   }
@@ -439,14 +445,14 @@ void Master::remove_expired_sessions() {
                session_data->get_name());
     commited = false;
     // expire session_data in mem and in BDB
-    HT_BDBTXN_BEGIN() {
+    HT_BDBTXN_BEGIN("remove_expired_sessions-begin-1") {
       m_bdb_fs->get_session_handles(txn, session_data->get_id(), handles);
       m_bdb_fs->expire_session(txn, session_data->get_id());
       txn->commit(0);
       commited = true;
       expired_sessions.push_back(session_data->get_id());
     }
-    HT_BDBTXN_END();
+    HT_BDBTXN_END("remove_expired_sessions-end-1", );
     // keep this outside the BDB txn since
     if (commited)
       session_data->expire();
@@ -463,13 +469,13 @@ void Master::remove_expired_sessions() {
 
   // delete expired sessions from BDB
   if (expired_sessions.size() > 0) {
-    HT_BDBTXN_BEGIN() {
+    HT_BDBTXN_BEGIN("remove_expired_sessions-begin-2") {
       foreach (uint64_t expired_session, expired_sessions) {
         m_bdb_fs->delete_session(txn, expired_session);
       }
       txn->commit(0);
     }
-    HT_BDBTXN_END();
+    HT_BDBTXN_END("remove_expired_sessions-end-2", );
   }
 }
 
@@ -506,7 +512,7 @@ Master::mkdir(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const 
 
   assert(name[0] == '/' && name[strlen(name)-1] != '/');
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("mkdir-begin") {
     // make sure parent node data is setup
     if (!validate_and_create_node_data(txn, parent_node)) {
       error = Error::HYPERSPACE_FILE_NOT_FOUND;
@@ -545,7 +551,7 @@ Master::mkdir(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const 
       commited = true;
     }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("mkdir-end", cb);
 
   // check for errors
   if (aborted) {
@@ -605,7 +611,7 @@ Master::unlink(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const
     return;
   }
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("unlink-begin") {
       ReqInfo req_info;
 
     // make sure parent node data is setup
@@ -666,7 +672,7 @@ Master::unlink(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const
         commited = true;
       }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("unlink-end", cb);
 
   // check for errors
   if (aborted) {
@@ -728,7 +734,7 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, uint64_t req_id, con
     HT_THROW(Error::HYPERSPACE_CREATE_FAILED,
              "initial attributes can only be supplied on CREATE");
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("open-begin") {
     // initialize vars since this runs in a loop
     aborted = false; commited = false; created = false; is_dir = false; lock_notify = false;
     persisted_lock_acquired_notifications = false; persisted_child_added_notifications = false;
@@ -883,7 +889,7 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, uint64_t req_id, con
         commited = true;
       }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("open-end", cb);
 
   // check for errors
   if (aborted) {
@@ -931,7 +937,7 @@ void Master::close(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, u
   }
 
   // delete handle from set of open session handles
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("close-begin") {
     m_bdb_fs->delete_session_handle(txn, session_id, handle);
     m_bdb_fs->set_handle_del_state(txn, handle, HANDLE_MARKED_FOR_DEL);
     // store req info
@@ -944,7 +950,7 @@ void Master::close(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, u
 
     txn->commit(0);
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("close-end", cb);
 
   // if handle was open then destroy it (release lock if any, grant next
   // pending lock, delete ephemeral etc.)
@@ -993,7 +999,7 @@ Master::attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uin
              (Llu)session_id, session_data->get_name(), (Llu)handle, name, (int)value_len);
   }
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("attr_set-begin") {
     //(re) initialize vars
     persisted_notifications = false; aborted = false; commited = false;
     ReqInfo req_info;
@@ -1032,7 +1038,7 @@ Master::attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uin
         commited = true;
       }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("attr_set-end", cb);
 
   // check for errors
   if (aborted) {
@@ -1083,7 +1089,7 @@ Master::attr_get(ResponseCallbackAttrGet *cb, uint64_t session_id,
     HT_INFOF("attrget(session=%llu(%s), handle=%llu, name=%s)",
              (Llu)session_id, session_data->get_name(), (Llu)handle, name);
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("attr_get-begin") {
     // (re) initialize vars
     aborted = false; commited = false;
 
@@ -1110,7 +1116,7 @@ Master::attr_get(ResponseCallbackAttrGet *cb, uint64_t session_id,
         commited = true;
       }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("attr_get-end", cb);
 
   if (aborted) {
     HT_DEBUG_OUT << "attrget(session=" << session_id << ", handle=" << handle << ", name='"
@@ -1162,7 +1168,7 @@ Master::attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uin
     HT_INFOF("attrdel(session=%llu(%s), handle=%llu, name=%s)",
              (Llu)session_id, session_data->get_name(), (Llu)handle, name);
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("attr_del-begin") {
     // (re) initialize vars
     persisted_notifications = false; aborted = false; commited = false;
     ReqInfo req_info;
@@ -1200,7 +1206,7 @@ Master::attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uin
         commited = true;
       }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("attr_del-end", cb);
 
   // check for errors
   if (aborted) {
@@ -1235,7 +1241,7 @@ Master::attr_exists(ResponseCallbackAttrExists *cb, uint64_t session_id, uint64_
   if (!get_session(session_id, session_data))
     HT_THROWF(Error::HYPERSPACE_EXPIRED_SESSION, "%llu", (Llu)session_id);
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("attr_exists-begin") {
     // (re) initialize vars
     aborted = false; exists = false;
 
@@ -1257,7 +1263,7 @@ Master::attr_exists(ResponseCallbackAttrExists *cb, uint64_t session_id, uint64_
       else
         txn->commit(0);
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("attr_exists-end", cb);
 
   if (aborted) {
     HT_ERROR_OUT << Error::get_text(error) << " - " << error_msg << HT_END;
@@ -1286,7 +1292,7 @@ Master::attr_list(ResponseCallbackAttrList *cb, uint64_t session_id, uint64_t ha
     HT_THROWF(Error::HYPERSPACE_EXPIRED_SESSION, "%llu", (Llu)session_id);
 
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("attr_list-begin") {
     aborted = false;
 
     if (!m_bdb_fs->handle_exists(txn, handle)) {
@@ -1311,7 +1317,7 @@ Master::attr_list(ResponseCallbackAttrList *cb, uint64_t session_id, uint64_t ha
       else
         txn->commit(0);
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("attr_list-end", cb);
 
   if (aborted) {
     HT_ERROR_OUT << Error::get_text(error) << " - " << error_msg << HT_END;
@@ -1343,11 +1349,11 @@ Master::exists(ResponseCallbackExists *cb, uint64_t session_id,
 
   assert(name[0] == '/' && name[strlen(name)-1] != '/');
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("exists-begin") {
     file_exists = m_bdb_fs->exists(txn, name);
     txn->commit(0);
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("exists-end", cb);
 
   if ((error = cb->response(file_exists)) != Error::OK)
     HT_ERRORF("Problem sending back response - %s", Error::get_text(error));
@@ -1386,7 +1392,7 @@ Master::readdir(ResponseCallbackReaddir *cb, uint64_t session_id,
     HT_INFOF("readdir(session=%llu(%s), handle=%llu)",
              (Llu)session_id, session_data->get_name(),(Llu)handle);
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("readdir-begin") {
     if (!m_bdb_fs->handle_exists(txn, handle)) {
       error = Error::HYPERSPACE_INVALID_HANDLE;
       error_msg = (String) "handle=" + handle;
@@ -1405,7 +1411,7 @@ Master::readdir(ResponseCallbackReaddir *cb, uint64_t session_id,
         commited = true;
       }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("readdir-end", cb);
 
   // check for errors
   if (aborted) {
@@ -1447,7 +1453,7 @@ Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t req_id, uin
              (Llu)session_id, session_data->get_name(), (Llu)handle, mode, try_lock);
   }
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("lock-begin") {
     // (re) initialize vars
     aborted = false; commited = false; persisted_notifications = false;
     lock_status=0; lock_generation = 0;
@@ -1563,7 +1569,7 @@ Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t req_id, uin
                      << " lock_generation=" << lock_generation << HT_END;
       }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("lock-end", cb);
 
   // check for errors
   if (aborted) {
@@ -1655,7 +1661,7 @@ Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint
   }
 
   // txn 1: release lock
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("release-begin-1") {
     if (!m_bdb_fs->handle_exists(txn, handle)) {
       error = Error::HYPERSPACE_INVALID_HANDLE;
       error_msg = (String) "handle=" + handle;
@@ -1684,7 +1690,7 @@ Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint
         commited = true;
       }
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("release-end-1", cb);
 
   // check for errors
   if (aborted) {
@@ -1698,7 +1704,7 @@ Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint
     deliver_event_notifications(lock_release_event, lock_release_notifications);
 
   // txn 2: grant pending lock(s)
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("release-begin-2") {
     grant_pending_lock_reqs(txn, node, lock_granted_event, lock_granted_notifications,
         lock_acquired_event, lock_acquired_notifications);
 
@@ -1718,7 +1724,7 @@ Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint
     // commit txn
     txn->commit(0);
   }
-  HT_BDBTXN_END_CB(cb);
+  HT_BDBTXN_END_CB("release-end-2", cb);
 
   // deliver lock granted & acquired notifications
   deliver_event_notifications(lock_granted_event, lock_granted_notifications);
@@ -1981,7 +1987,7 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool w
   HT_ASSERT((session_id != 0 && req_id !=0 ) || (session_id ==0 && req_id ==0));
 
   // txn 1: release lock
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("destroy_handle-begin-1") {
     m_bdb_fs->get_handle_node(txn, handle, node);
     m_bdb_fs->delete_node_handle(txn, node, handle);
     release_lock(txn, handle, node, lock_release_event, lock_release_notifications);
@@ -1997,14 +2003,14 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool w
     }
     txn->commit(0);
   }
-  HT_BDBTXN_END(false);
+  HT_BDBTXN_END("destroy_handle-end-1", false);
 
   // deliver lock released notifications
   deliver_event_notifications(lock_release_event, lock_release_notifications,
                               wait_for_notify);
 
   // txn 2: grant pending lock(s)
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("destroy_handle-begin-2") {
     grant_pending_lock_reqs(txn, node, lock_granted_event, lock_granted_notifications,
         lock_acquired_event, lock_acquired_notifications);
     m_bdb_fs->set_handle_del_state(txn, handle, HANDLE_PENDING_LOCKS_GRANTED);
@@ -2026,7 +2032,7 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool w
     }
     txn->commit(0);
   }
-  HT_BDBTXN_END(false);
+  HT_BDBTXN_END("destroy_handle-end-2", false);
 
   // deliver lock granted & acquired notifications
   deliver_event_notifications(lock_granted_event, lock_granted_notifications, wait_for_notify);
@@ -2034,7 +2040,7 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool w
                               wait_for_notify);
 
   // txn 3: delete node if ephemeral and no one has it open
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("destroy_handle-begin-3") {
     has_refs = m_bdb_fs->node_has_open_handles(txn, node);
     if (!has_refs && m_bdb_fs->node_is_ephemeral(txn, node)) {
       String parent_node, child_node;
@@ -2075,7 +2081,7 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool w
     }
     txn->commit(0);
   }
-  HT_BDBTXN_END(false);
+  HT_BDBTXN_END("destroy_handle-end-3", false);
   // deliver node removed notifications
   if (node_removed) {
     deliver_event_notifications(node_removed_event, node_removed_notifications,
@@ -2083,7 +2089,7 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool w
   }
 
   // txn 4: delete handle data from BDB
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("destroy_handle-begin-4") {
     m_bdb_fs->delete_handle(txn, handle);
     // update request state if reqd
     if (req_id != 0) {
@@ -2096,7 +2102,7 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool w
     }
     txn->commit(0);
   }
-  HT_BDBTXN_END(false);
+  HT_BDBTXN_END("destroy_handle-end-4", false);
 
   return true;
 }
@@ -2106,7 +2112,7 @@ Master::destroy_handle(uint64_t handle, int *errorp, std::string &errmsg, bool w
  */
 void Master::get_generation_number() {
 
-  HT_BDBTXN_BEGIN() {
+  HT_BDBTXN_BEGIN("get_generation_number-begin") {
     if (!m_bdb_fs->get_xattr_i32(txn, "/hyperspace/metadata", "generation",
                                  &m_generation))
       m_generation = 0;
@@ -2116,7 +2122,7 @@ void Master::get_generation_number() {
                             m_generation);
     txn->commit(0);
   }
-  HT_BDBTXN_END();
+  HT_BDBTXN_END("get_generation_number-end", );
 }
 
 /**
