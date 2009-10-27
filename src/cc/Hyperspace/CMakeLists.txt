@@ -48,6 +48,7 @@ RequestHandlerDelete.cc
 RequestHandlerExpireSessions.cc
 RequestHandlerRenewSession.cc
 RequestHandlerOpen.cc
+RequestHandlerRecoverOpen.cc
 RequestHandlerClose.cc
 RequestHandlerAttrSet.cc
 RequestHandlerAttrGet.cc

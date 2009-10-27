@@ -36,6 +36,7 @@
 
 #include "DirEntry.h"
 #include "StateDbKeys.h"
+#include "Protocol.h"
 
 namespace Hyperspace {
   using namespace Hypertable;
@@ -46,7 +47,7 @@ namespace Hyperspace {
 
   class ReqInfo {
   public:
-    ReqInfo(int tt=-1, uint32_t ss=0) : type(tt), state(ss),
+    ReqInfo(uint64_t tt=-1, uint32_t ss=0) : type(tt), state(ss),
         args(0), ret_val(0) { }
     /**
      * WARNING: the arg is not really const since ownership of the args and ret_val
@@ -69,19 +70,20 @@ namespace Hyperspace {
     }
 
     void clear() {
-      type =-1;
+      type=Protocol::COMMAND_MAX;
       state=0;
       args.free();
       ret_val.free();
     }
 
-    int type;
+    uint64_t type;
     uint32_t state;
     vector<uint64_t> event_notifications;
     StaticBuffer args;
     StaticBuffer ret_val;
   };
-  typedef map<uint64_t, ReqInfo> ReqMap;
+  typedef map<uint64_t, ReqInfo> ReqInfoMap;
+  typedef map<uint64_t, uint64_t> ReqTypeMap;
 
   class LockRequest {
   public:
@@ -176,6 +178,14 @@ namespace Hyperspace {
     bool event_exists(DbTxn *txn, uint64_t id);
 
     /**
+     * Return ids of all sessions
+     *
+     * @param txn BerkeleyDB txn for this DB update
+     * @param sessions vector to be populated with session ids
+     */
+    void get_all_sessions(DbTxn *txn, vector<uint64_t> &sessions);
+
+    /**
      * Persist a new SessionData object in the StateDB
      *
      * @param txn BerkeleyDB txn for this DB update
@@ -201,6 +211,15 @@ namespace Hyperspace {
      * @param id Session id
      */
     void expire_session(DbTxn *txn, uint64_t id);
+
+    /**
+     * Check if session is expired or not
+     *
+     * @param txn BerkeleyDB txn for this DB update
+     * @param id Session id
+     * @return true if session has been marked as expired
+     */
+    bool session_expired(DbTxn *txn, uint64_t id);
 
     /**
      * Check if request exists
@@ -232,7 +251,7 @@ namespace Hyperspace {
     void update_session_req_state(DbTxn *txn, uint64_t id, uint64_t req_id, uint32_t req_state);
 
     /**
-     * Set the return code for this request
+     * Set the return values for this request
      *
      * @param txn BerkeleyDB txn for this DB update
      * @param id Session id
@@ -298,7 +317,16 @@ namespace Hyperspace {
      * @param id Session id
      * @param requests stores the populate map of req_id --> req info
      */
-    void get_all_session_reqs(DbTxn *txn, uint64_t id, ReqMap &requests);
+    void get_all_session_reqs(DbTxn *txn, uint64_t id, ReqInfoMap &requests);
+
+    /**
+     * Get req id and type for all requests for this session
+     *
+     * @param txn BerkeleyDB txn for this DB update
+     * @param id Session id
+     * @param requests stores the populate map of req_id --> req type
+     */
+    void get_all_session_req_types(DbTxn *txn, uint64_t id, ReqTypeMap &requests);
 
     /**
      * Store new handle opened by specified session
@@ -347,6 +375,15 @@ namespace Hyperspace {
      * @return remote session executable
      */
     String get_session_name(DbTxn *txn, uint64_t id);
+
+    /**
+     * Get addr of session
+     *
+     * @param txn BerkeleyDB txn for this DB update
+     * @param id Session id
+     * @return remote session addr
+     */
+    String get_session_addr(DbTxn *txn, uint64_t id);
 
     /**
      * Set name of session executable

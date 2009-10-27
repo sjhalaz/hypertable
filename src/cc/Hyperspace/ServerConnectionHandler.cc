@@ -67,7 +67,7 @@ void ServerConnectionHandler::handle(EventPtr &event) {
                   (Llu)event->header.command);
 
       switch (event->header.command) {
-         case Protocol::COMMAND_HANDSHAKE:
+        case Protocol::COMMAND_HANDSHAKE:
            {
              const uint8_t *decode_ptr = event->payload;
              size_t decode_remain = event->payload_len;

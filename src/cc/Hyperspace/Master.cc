@@ -34,6 +34,8 @@ extern "C" {
 #include <unistd.h>
 }
 
+#include "AsyncComm/ApplicationQueue.h"
+
 #include "Common/Mutex.h"
 #include "Common/Error.h"
 #include "Common/Filesystem.h"
@@ -43,6 +45,8 @@ extern "C" {
 #include "Common/Serialization.h"
 
 #include "DfsBroker/Lib/Client.h"
+
+#include "RequestHandlerRecoverOpen.h"
 
 #include "Config.h"
 #include "Event.h"
@@ -217,12 +221,108 @@ Master::Master(ConnectionManagerPtr &conn_mgr, PropertiesPtr &props,
   m_keepalive_handler_ptr.reset(
    new ServerKeepaliveHandler(conn_mgr->get_comm(), this, app_queue_ptr));
   keepalive_handler = m_keepalive_handler_ptr;
+
+  /**
+   * Recover incomplete requests
+   */
+  do_recovery();
 }
 
 
 Master::~Master() {
   delete m_bdb_fs;
   ::close(m_lock_fd);
+}
+
+/**
+ * No need for locks since this is happening in a single thread
+ */
+void
+Master::do_recovery()
+{
+  vector<uint64_t> sessions;
+
+  HT_BDBTXN_BEGIN("do_recovery-begin-1") {
+    m_bdb_fs->get_all_sessions(txn, sessions);
+    foreach(uint64_t session, sessions) {
+      recover_session(txn, session);
+    }
+  }
+  HT_BDBTXN_END("do_recovery-end-1", );
+
+  // extend lease on all active sessions
+  // TODO: XXX: I WAS HERE
+
+  // increment master generation number
+}
+
+/**
+ * No need for locks since this is happening in a single thread
+ */
+void
+Master::recover_session(DbTxn *txn, uint64_t session_id)
+{
+  SessionDataPtr session_data;
+  sockaddr_in addr;
+  String addr_str, name;
+  ReqTypeMap requests;
+  bool expired = m_bdb_fs->session_expired(txn, session_id);
+
+  // load in session data
+  addr_str = m_bdb_fs->get_session_addr(txn, session_id);
+  if (!InetAddr::initialize(&addr, addr_str.c_str()))
+    HT_THROWF(Error::COMM_SOCKET_ERROR, "Bad address:%s", addr_str.c_str());
+  name = m_bdb_fs->get_session_name(txn, session_id);
+  session_data = new SessionData(addr, m_lease_interval, session_id);
+  session_data->set_name(name);
+
+  // check if session is expired
+  if(expired) {
+    session_data->expire();
+    m_expired_sessions.push_back(session_id);
+  }
+
+  // go through all incomplete requests for this session and enqueue their recovery
+  get_all_session_req_types(txn, session_id, requests);
+  foreach (const ReqTypeMap::value_type &v, requests) {
+    recover_request(session_id, v.first, v.second);
+  }
+  // TODO:: XXX I WAS HERE
+
+  // update session map/heap
+  m_session_map[session_id] = session_data;
+  m_session_heap.push_back(session_data);
+}
+
+void
+Master::recover_request(uint64_t session_id, uint64_t req_id, int req_type)
+{
+  ApplicationHandler *handler=0;
+
+  switch(req_type) {
+    case Protocol::COMMAND_OPEN:
+      handler = new RequestHandlerRecoverOpen(this, session_id, req_id);
+      break;
+    case Protocol::COMMAND_CLOSE: //<<< I AM HERE XXX: >>>
+      break;
+    case Protocol::COMMAND_MKDIR:
+      break;
+    case Protocol::COMMAND_DELETE:
+      break;
+    case Protocol::COMMAND_ATTRSET:
+      break;
+    case Protocol::COMMAND_ATTRDEL:
+      break;
+    case Protocol::COMMAND_LOCK:
+      break;
+    case Protocol::COMMAND_RELEASE:
+      break;
+    default:
+      HT_EXPECT(false, Error::PROTOCOL_ERROR);
+  }
+  m_app_queue_ptr->add(handler);
+  // add request completion completion to map
+
 }
 
 /**
@@ -401,7 +501,7 @@ Master::next_expired_session(SessionDataPtr &session_data, boost::xtime &now) {
  * > destroy all expired & open handles
  * > delete expired sessions in BDB
  */
-void Master::remove_expired_sessions() {
+void Master::remove_expired_sessions(bool recover) {
   SessionDataPtr session_data;
   int error;
   std::string errmsg;
@@ -409,8 +509,9 @@ void Master::remove_expired_sessions() {
   std::vector<uint64_t> expired_sessions;
   boost::xtime now;
   uint64_t lease_credit;
+  ScopedLock lock(m_remove_expired_sessions_mutex);
 
-  {
+  if (!recover) {
     // start extend expiry in case of suspension
     {
       ScopedLock lock(m_last_tick_mutex);
@@ -438,45 +539,61 @@ void Master::remove_expired_sessions() {
   } // end extend expiry in case of suspension
 
   // mark expired sessions
-  while (next_expired_session(session_data, now)) {
-    bool commited = false;
-    if (m_verbose)
-      HT_INFOF("Expiring session %llu name=%s", (Llu)session_data->get_id(),
-               session_data->get_name());
-    commited = false;
-    // expire session_data in mem and in BDB
-    HT_BDBTXN_BEGIN("remove_expired_sessions-begin-1") {
-      m_bdb_fs->get_session_handles(txn, session_data->get_id(), handles);
-      m_bdb_fs->expire_session(txn, session_data->get_id());
-      txn->commit(0);
-      commited = true;
-      expired_sessions.push_back(session_data->get_id());
+  if (!recover) {
+    while (next_expired_session(session_data, now)) {
+      bool commited = false;
+      if (m_verbose)
+        HT_INFOF("Expiring session %llu name=%s", (Llu)session_data->get_id(),
+                 session_data->get_name());
+      commited = false;
+      // expire session_data in mem and in BDB
+      HT_BDBTXN_BEGIN("remove_expired_sessions-begin-1") {
+        m_bdb_fs->get_session_handles(txn, session_data->get_id(), handles);
+        m_bdb_fs->expire_session(txn, session_data->get_id());
+        txn->commit(0);
+        commited = true;
+        expired_sessions.push_back(session_data->get_id());
+      }
+      HT_BDBTXN_END("remove_expired_sessions-end-1", );
+      // keep this outside the BDB txn since
+      if (commited)
+        session_data->expire();
     }
-    HT_BDBTXN_END("remove_expired_sessions-end-1", );
-    // keep this outside the BDB txn since
-    if (commited)
-      session_data->expire();
+  }
+  else {
+    expired_sessions = m_expired_sessions;
+    // during recovery get all open handles for expired sessions
+    HT_BDBTXN_BEGIN("remove_expired_sessions-begin-2") {
+      foreach (uint64_t expired_session, expired_sessions) {
+        m_bdb_fs->get_session_handles(txn, expired_session, handles);
+      }
+      txn->commit(0);
+    }
+    HT_BDBTXN_END("remove_expired_sessions-end-2", );
   }
 
   // delete handles open by expired sessions
   foreach(uint64_t handle, handles) {
     if (m_verbose)
       HT_INFOF("Destroying handle %llu", (Llu)handle);
-    if (!destroy_handle(handle, &error, errmsg, false))
+    if (!destroy_handle(handle, &error, errmsg, false, recover))
       HT_ERRORF("Problem destroying handle - %s (%s)",
                 Error::get_text(error), errmsg.c_str());
   }
 
   // delete expired sessions from BDB
   if (expired_sessions.size() > 0) {
-    HT_BDBTXN_BEGIN("remove_expired_sessions-begin-2") {
+    HT_BDBTXN_BEGIN("remove_expired_sessions-begin-3") {
       foreach (uint64_t expired_session, expired_sessions) {
         m_bdb_fs->delete_session(txn, expired_session);
       }
       txn->commit(0);
     }
-    HT_BDBTXN_END("remove_expired_sessions-end-2", );
+    HT_BDBTXN_END("remove_expired_sessions-end-3", );
   }
+
+  if (recover)
+    m_expired_sessions.clear();
 }
 
 /**
@@ -539,7 +656,7 @@ Master::mkdir(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const 
     m_bdb_fs->create_node(txn, name, false, 1);
 
     // store req info
-    req_info.type = REQ_MKDIR;
+    req_info.type = Protocol::COMMAND_MKDIR;
     req_info.state = 1;
     m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
@@ -660,7 +777,7 @@ Master::unlink(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const
     m_bdb_fs->delete_node(txn, node);
 
     // store req info
-    req_info.type = REQ_UNLINK;
+    req_info.type = Protocol::COMMAND_DELETE;
     req_info.state = 1;
     m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
@@ -693,7 +810,8 @@ Master::unlink(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, const
  */
 void
 Master::open(ResponseCallbackOpen *cb, uint64_t session_id, uint64_t req_id, const char *name,
-    uint32_t flags, uint32_t event_mask, std::vector<Attribute> &init_attrs) {
+    uint32_t flags, uint32_t event_mask, std::vector<Attribute> &init_attrs, bool recover,
+    bool retry) {
 
   SessionDataPtr session_data;
   String child_name, node = name, parent_node;
@@ -723,8 +841,10 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, uint64_t req_id, con
     HT_THROWF(Error::HYPERSPACE_EXPIRED_SESSION, "%llu", (Llu)session_id);
 
   if (m_verbose) {
-    HT_INFOF("open(session_id=%llu, session_name = %s, fname=%s, flags=0x%x, event_mask=0x%x)",
-             (Llu)session_id, session_data->get_name(), name, flags, event_mask);
+    HT_INFO_OUT << "open(session_id=" << session_id << ", session_name = "
+                << session_data->get_name() << ", fname="<< name ", flags=0x"
+                << std::hex << flags << ", event_mask=0x" << std::hex << event_mask
+                << ", recover=", << recover << ", retry=" << retry << ")" << HT_END;
   }
 
   if (!find_parent_node(name, parent_node, child_name))
@@ -734,6 +854,11 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, uint64_t req_id, con
     HT_THROW(Error::HYPERSPACE_CREATE_FAILED,
              "initial attributes can only be supplied on CREATE");
 
+  // TODO: XXX: I AM HERE
+  if (recover) {
+  }
+  if (retry) {
+  }
   HT_BDBTXN_BEGIN("open-begin") {
     // initialize vars since this runs in a loop
     aborted = false; commited = false; created = false; is_dir = false; lock_notify = false;
@@ -868,7 +993,7 @@ Master::open(ResponseCallbackOpen *cb, uint64_t session_id, uint64_t req_id, con
     m_bdb_fs->add_node_handle(txn, node, handle);
 
     // store req info
-    req_info.type = REQ_OPEN;
+    req_info.type = Protocol::COMMAND_OPEN;
     req_info.state = 1;
     ptr = ret_val = new uint8_t[ret_val_size];
     Serialization::encode_i64(&ptr, handle);
@@ -941,7 +1066,7 @@ void Master::close(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, u
     m_bdb_fs->delete_session_handle(txn, session_id, handle);
     m_bdb_fs->set_handle_del_state(txn, handle, HANDLE_MARKED_FOR_DEL);
     // store req info
-    req_info.type = REQ_CLOSE;
+    req_info.type = Protocol::COMMAND_CLOSE;
     req_info.state = 1;
     ptr = args = new uint8_t[args_size];
     Serialization::encode_i64(&ptr, handle);
@@ -954,7 +1079,7 @@ void Master::close(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, u
 
   // if handle was open then destroy it (release lock if any, grant next
   // pending lock, delete ephemeral etc.)
-  if (!destroy_handle(handle, &error, errmsg, true, session_id, req_id, req_info.state)) {
+  if (!destroy_handle(handle, &error, errmsg, true, false, session_id, req_id, req_info.state)) {
     cb->error(error, errmsg);
     return;
   }
@@ -1026,7 +1151,7 @@ Master::attr_set(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uin
       req_info.event_notifications.push_back(event_id);
     }
     // store req info
-    req_info.type = REQ_ATTR_SET;
+    req_info.type = Protocol::COMMAND_ATTRSET;
     req_info.state = 1;
     m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
@@ -1194,7 +1319,7 @@ Master::attr_del(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uin
       req_info.event_notifications.push_back(event_id);
     }
     // store req info
-    req_info.type = REQ_ATTR_DEL;
+    req_info.type = Protocol::COMMAND_ATTRDEL;
     req_info.state = 1;
     m_bdb_fs->add_session_req(txn, session_id, req_id, req_info);
 
@@ -1554,7 +1679,7 @@ Master::lock(ResponseCallbackLock *cb, uint64_t session_id, uint64_t req_id, uin
       }
       else {
         // store req info
-        req_info.type = REQ_LOCK;
+        req_info.type = Protocol::COMMAND_LOCK;
         req_info.state = 1;
         ptr = ret_val = new uint8_t[ret_val_size];
         Serialization::encode_i32(&ptr, lock_status);
@@ -1673,7 +1798,7 @@ Master::release(ResponseCallback *cb, uint64_t session_id, uint64_t req_id, uint
 
     release_lock(txn, handle, node, lock_release_event, lock_release_notifications);
     // store req info
-    req_info.type = REQ_RELEASE;
+    req_info.type = Protocol::COMMAND_RELEASE;
     req_info.state = 1;
     ptr = args = new uint8_t[args_size];
     Serialization::encode_i64(&ptr, handle);
@@ -2149,3 +2274,5 @@ Master::validate_and_create_node_data(DbTxn *txn, const String &node)
 
   return true;
 }
+
+

@@ -103,8 +103,11 @@ namespace StateDbKeys {
       case(SESSION_REQ_RET_VAL):
         key += SESSION_REQ_RET_VAL_STR;
         break;
-      case(SESSION_REQ_TYPE_STATE):
-        key += SESSION_REQ_TYPE_STATE_STR;
+      case(SESSION_REQ_TYPE):
+        key += SESSION_REQ_TYPE_STR;
+        break;
+      case(SESSION_REQ_STATE):
+        key += SESSION_REQ_STATE_STR;
         break;
       default:
         HT_EXPECT(false, HYPERSPACE_STATEDB_BAD_KEY);

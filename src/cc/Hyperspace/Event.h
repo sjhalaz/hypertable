@@ -137,12 +137,12 @@ namespace Hyperspace {
     }
 
   protected:
-    static            BerkeleyDbFilesystem *ms_bdb_fs;
-    Mutex             m_mutex;
-    boost::condition  m_cond;
-    uint64_t m_id;
-    uint32_t m_mask;
-    uint32_t m_notification_count;
+    static BerkeleyDbFilesystem *ms_bdb_fs;
+    Mutex                        m_mutex;
+    boost::condition             m_cond;
+    uint64_t                     m_id;
+    uint32_t                     m_mask;
+    uint32_t                     m_notification_count;
   };
 
   typedef boost::intrusive_ptr<Event> HyperspaceEventPtr;

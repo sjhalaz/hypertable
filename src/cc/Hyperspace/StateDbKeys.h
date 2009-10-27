@@ -49,8 +49,8 @@ namespace StateDbKeys {
       SESSION_REQ_ARGS                         ,
       SESSION_REQ_EVENTS                       ,
       SESSION_REQ_RET_VAL                      ,
-      SESSION_REQ_TYPE_STATE                   ,
-
+      SESSION_REQ_TYPE                         ,
+      SESSION_REQ_STATE                        ,
       //HandleMap
       HANDLES                      = 0x60000001,
       //Handle state
@@ -113,11 +113,8 @@ namespace StateDbKeys {
     const String SESSION_REQ_ARGS_STR            = "ARGS" + PATH_DELIM_STR;
     const String SESSION_REQ_EVENTS_STR          = "EVTS" + PATH_DELIM_STR;
     const String SESSION_REQ_RET_VAL_STR         = "RET" + PATH_DELIM_STR;
-    const String SESSION_REQ_TYPE_STATE_STR      = "TS" + PATH_DELIM_STR;
-
-    const uint32_t SESSION_REQ_TYPE_MASK         = 0xFFFF0000;
-    const uint32_t SESSION_REQ_STATE_MASK        = 0x0000FFFF;
-
+    const String SESSION_REQ_TYPE_STR            = "TYP" + PATH_DELIM_STR;
+    const String SESSION_REQ_STATE_STR           = "ST" + PATH_DELIM_STR;
 
     const String NODES_STR                       = PATH_DELIM_STR +
                                                    "NODES" +

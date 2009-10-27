@@ -1429,12 +1429,18 @@ BerkeleyDbFilesystem::add_session_req(DbTxn *txn, uint64_t id, uint64_t req_id,
     ret = m_state_db->put(txn, &keym, &data, 0);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
 
-    // Store request type & state under /SESSIONS/id/REQS/req_id/TS/
-    // Store type and state in one 32 bit int string to save space
-    uint32_t type_state = (req_info.type << 16) | (req_info.state);
-    key_str = get_session_req_key(id, req_id, SESSION_REQ_TYPE_STATE);
+    // Store request type
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_TYPE);
     keym.set_str(key_str);
-    sprintf(numbuf, "%lu", (Lu)type_state);
+    sprintf(numbuf, "%llu", (Llu)req_info.type);
+    datam.set_str(numbuf);
+    ret = m_state_db->put(txn, &keym, &datam, 0);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
+
+    // Store request state
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_STATE);
+    keym.set_str(key_str);
+    sprintf(numbuf, "%lu", (Lu)req_info.state);
     datam.set_str(numbuf);
     ret = m_state_db->put(txn, &keym, &datam, 0);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_ERROR);
@@ -1862,14 +1868,19 @@ BerkeleyDbFilesystem::get_session_req(DbTxn *txn, Dbc *cursorp, uint64_t id, uin
     memcpy(buffer, (uint8_t *)datam.get_data(), datam.get_size());
     req_info.ret_val.set(buffer , datam.get_size(), true);
 
-    // Read in request type & state under /SESSIONS/id/REQS/req_id/TS/
-    key_str = get_session_req_key(id, req_id, SESSION_REQ_TYPE_STATE);
+    // Read in request type
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_TYPE);
     keym.set_str(key_str);
     ret = cursorp->get(&keym, &datam, DB_SET);
     HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_SESSION_ATTR_NOT_FOUND);
-    type_state = (uint32_t)strtoul(datam.get_str(), 0, 0);
-    req_info.type = (type_state >> 16);
-    req_info.state = type_state & SESSION_REQ_STATE_MASK;
+    req_info.type = (uint64_t)strtoull(datam.get_str(), 0, 0);
+
+    // Read in request state
+    key_str = get_session_req_key(id, req_id, SESSION_REQ_STATE);
+    keym.set_str(key_str);
+    ret = cursorp->get(&keym, &datam, DB_SET);
+    HT_EXPECT(ret == 0, HYPERSPACE_STATEDB_SESSION_ATTR_NOT_FOUND);
+    req_info.state = (uint32_t)strtoul(datam.get_str(), 0, 0);
 
   }
   catch (DbException &e) {
