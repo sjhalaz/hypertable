@@ -149,7 +149,15 @@ void ConnectionHandler::handle(EventPtr &event) {
       case MasterProtocol::COMMAND_FETCH_RESULT:
         m_context->response_manager->add_delivery_info(event);
         return;
-
+      case MasterProtocol::COMMAND_PLAYER_COMPLETE:
+        m_context->player_complete(event);
+        return;
+      case MasterProtocol::COMMAND_PHANTOM_PREPARE_COMPLETE:
+        m_context->prepare_complete(event);
+        return;
+      case MasterProtocol::COMMAND_PHANTOM_PREPARE_COMPLETE:
+        m_context->commit_complete(event);
+        return;
       default:
         HT_THROWF(PROTOCOL_ERROR, "Unimplemented command (%llu)",
                   (Llu)event->header.command);

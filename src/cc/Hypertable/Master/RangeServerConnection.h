@@ -54,7 +54,7 @@ namespace Hypertable {
 
     bool connected() { ScopedLock lock(m_mutex); return m_connected; }
     bool get_removed();
-    void set_removed();
+    void set_removed(bool val);
     bool get_balanced();
     bool set_balanced(bool val=true);
     bool wait_for_connection();

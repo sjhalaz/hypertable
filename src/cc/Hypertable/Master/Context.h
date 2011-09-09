@@ -59,6 +59,8 @@ namespace Hypertable {
   class OperationBalance;
   class ResponseManager;
   class RemovalManager;
+  class RSRecoveryReplayCounterPtr;
+  class RSRecoveryCounterPtr;
 
   class Context : public ReferenceCount {
   public:
@@ -121,8 +123,29 @@ namespace Hypertable {
     size_t connection_count() { ScopedLock lock(mutex); return conn_count; }
     size_t server_count() { ScopedLock lock(mutex); return m_server_list.size(); }
     void get_servers(std::vector<RangeServerConnectionPtr> &servers);
+    void get_connected_servers(std::vector<RangeServerConnectionPtr> &servers);
+    void get_connected_servers(StringSet &locations);
+    void player_complete(EventPtr &event);
+    void install_rs_recovery_replay_counter(int64_t id,
+        RSRecoveryReplayCounterPtr &replay_counter);
+    void erase_rs_recovery_replay_counter(int64_t id);
+    void prepare_complete(EventPtr &event);
+    void install_rs_recovery_prepare_counter(int64_t id,
+        RSRecoveryCounterPtr &prepare_counter);
+    void erase_rs_recovery_prepare_counter(int64_t id);
+    void commit_complete(EventPtr &event);
+    void install_rs_recovery_commit_counter(int64_t id,
+        RSRecoveryCounterPtr &commit_counter);
+    void erase_rs_recovery_commit_counter(int64_t id);
 
   private:
+
+    Mutex m_recovery_mutex;
+    typedef std::map<int64_t, RSRecoveryReplayCounterPtr> RSRecoveryReplayMap;
+    RSRecoveryReplayMap m_recovery_replay_map;
+    typedef std::map<int64_t, RSRecoveryPrepareCounterPtr> RSRecoveryMap;
+    RSRecoveryMap m_recovery_prepare_map;
+    RSRecoveryMap m_recovery_commit_map;
 
     class RangeServerConnectionEntry {
     public:

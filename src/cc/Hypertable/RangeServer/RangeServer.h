@@ -55,6 +55,9 @@
 #include "ResponseCallbackFetchScanblock.h"
 #include "ResponseCallbackGetStatistics.h"
 #include "ResponseCallbackUpdate.h"
+#include "ResponseCallbackPhantomUpdate.h"
+#include "ResponseCallbackAcknowledgeLoad.h"
+
 #include "TableIdCache.h"
 #include "TableInfo.h"
 #include "TableInfoMap.h"
@@ -84,8 +87,8 @@ namespace Hypertable {
     void load_range(ResponseCallback *, const TableIdentifier *,
                     const RangeSpec *, const char *transfer_log_dir,
                     const RangeState *, bool needs_compaction);
-    void acknowledge_load(ResponseCallback *, const TableIdentifier *,
-                          const RangeSpec *);
+    void acknowledge_load(ResponseCallbackAcknowledgeLoad *cb,
+                          const vector<QualifiedRangeSpec> &ranges);
     void update_schema(ResponseCallback *, const TableIdentifier *,
                        const char *);
     void update(ResponseCallbackUpdate *, const TableIdentifier *,
@@ -111,6 +114,23 @@ namespace Hypertable {
     void heapcheck(ResponseCallback *, const char *);
 
     void metadata_sync(ResponseCallback *, const char *, uint32_t flags, std::vector<const char *> columns);
+
+    void play_fragments(ResponseCallback *, int64_t op_id, uint32_t attempt,
+        const String &location, int type, const vector<uint32_t> &fragments,
+        RangeServerRecoveryLoadPlan &load_plan, uint32_t replay_timeout);
+
+    void phantom_load(ResponseCallback *, const String &location,
+        const vector<uint32_t> &fragments, const vector<QualifiedRangeSpecManaged> &ranges);
+
+    void phantom_update(ResponseCallbackPhantomUpdate *, const String &location,
+                        QualifiedRangeSpec &range, uint32_t fragment, bool more,
+                        EventPtr &event);
+
+    void phantom_prepare_ranges(ResponseCallback *, int64_t op_id, uint32_t attempt,
+        const String &location, const vector<QualifiedRangeSpec> &ranges);
+
+    void phantom_commit_ranges(ResponseCallback *, int64_t op_id, uint32_t attempt,
+        const String &location, const vector<QualifiedRangeSpec> &ranges);
 
     void close(ResponseCallback *cb);
 
@@ -218,6 +238,11 @@ namespace Hypertable {
     Comm                  *m_comm;
     TableInfoMapPtr        m_live_map;
     TableInfoMapPtr        m_replay_map;
+    TableInfoMapPtr        m_phantom_map;
+    typedef map<String, PhantomRangeMapPtr> FailoverPhantomRangeMap;
+    FailoverPhantomRangeMap m_failover_map;
+    Mutex                  m_failover_map_mutex;
+
     CommitLogPtr           m_replay_log;
     ConnectionManagerPtr   m_conn_manager;
     ApplicationQueuePtr    m_app_queue;

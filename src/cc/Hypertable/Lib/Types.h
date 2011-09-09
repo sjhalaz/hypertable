@@ -1,5 +1,5 @@
 /** -*- c++ -*-
- * Copyright (C) 2008 Doug Judd (Zvents, Inc.)
+ * Copyright (C) 2011 Hypertable, Inc.
  *
  * This file is part of Hypertable.
  *
@@ -120,6 +120,8 @@ namespace Hypertable {
   /** Identifies a range */
   class RangeSpec {
   public:
+    enum Type {ROOT=0, METADATA=1, SYSTEM=2, USER=3, UNKNOWN=4};
+    static String type_str(int type);
     RangeSpec() : start_row(0), end_row(0) { return; }
     RangeSpec(const char *start, const char *end)
         : start_row(start), end_row(end) {}
@@ -184,14 +186,79 @@ namespace Hypertable {
     String m_start, m_end;
   };
 
-
   /** RangeSpec with table id */
   class QualifiedRangeSpec {
   public:
     QualifiedRangeSpec(const TableIdentifier &tid, const RangeSpec &rs)
       : table(tid), range(rs) {}
+    QualifiedRangeSpec() { }
+
+    virtual bool operator<(const QualifiedRangeSpec &other) const;
+    virtual bool operator==(const QualifiedRangeSpec &other) const;
+    virtual bool is_root() const;
+
+    virtual size_t encoded_length() const;
+    virtual void encode(uint8_t **bufp) const;
+    virtual void decode(const uint8_t **bufp, size_t *remainp);
+
     TableIdentifier table;
     RangeSpec range;
+  };
+
+  class QualifiedRangeSpecManaged : public QualifiedRangeSpec {
+  public:
+    QualifiedRangeSpecManaged() { }
+    QualifiedRangeSpecManaged(const QualifiedRangeSpecManaged &other) { operator=(other); }
+    QualifiedRangeSpecManaged(const QualifiedRangeSpec &other) { operator=(other); }
+    QualifiedRangeSpecManaged(const TableIdentifier &table, const RangeSpec &range) {
+      set_table_id(table);
+      set_range_spec(range);
+    }
+
+
+    virtual ~QualifiedRangeSpecManaged() { }
+
+    QualifiedRangeSpecManaged &operator=(const QualifiedRangeSpecManaged &other) {
+      const QualifiedRangeSpec *otherp = &other;
+      return operator=(*otherp);
+    }
+
+    QualifiedRangeSpecManaged &operator=(const QualifiedRangeSpec &other) {
+      m_range = other.range;
+      range = m_range;
+      m_table = other.table;
+      table = m_table;
+      return *this;
+    }
+
+    void set_range_spec(const RangeSpec &rs) {
+      m_range = rs;
+      range = m_range;
+    }
+    void set_table_id(const TableIdentifier &tid) {
+      m_table = tid;
+      table = m_table;
+    }
+
+    bool operator<(const QualifiedRangeSpecManaged &other) const;
+    size_t encoded_length() const;
+    void encode(uint8_t **bufp) const;
+    virtual void decode(const uint8_t **bufp, size_t *remainp);
+    friend std::ostream &operator<<(std::ostream &os,
+        const QualifiedRangeSpecManaged &qualified_range);
+    private:
+    TableIdentifierManaged m_table;
+    RangeSpecManaged m_range;
+  };
+
+  struct LtQualifiedRangeSpecManaged {
+    bool operator()(const QualifiedRangeSpecManaged *qr1,
+        const QualifiedRangeSpecManaged *qr2) {
+      if (qr1)
+        return ((*qr1) < *qr2);
+      else
+        return false;
+    }
   };
 
   class QualifiedRangeHash {
@@ -212,11 +279,13 @@ namespace Hypertable {
     }
   };
 
-
   std::ostream &operator<<(std::ostream &os, const TableIdentifier &tid);
 
   std::ostream &operator<<(std::ostream &os, const RangeSpec &range);
 
+  std::ostream &operator<<(std::ostream &os, const QualifiedRangeSpec &qualified_range);
+
+  std::ostream &operator<<(std::ostream &os, const QualifiedRangeSpecManaged &qualified_range);
 
 } // namespace Hypertable
 

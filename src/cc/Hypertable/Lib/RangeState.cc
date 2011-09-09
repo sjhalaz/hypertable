@@ -81,6 +81,7 @@ std::ostream& Hypertable::operator<<(std::ostream &out, const RangeState &st) {
   case RangeState::STEADY: out <<"STEADY";              break;
   case RangeState::SPLIT_LOG_INSTALLED: out <<"SLI";    break;
   case RangeState::SPLIT_SHRUNK: out <<"SHRUNK";        break;
+  case RangeState::PHANTOM: out <<"PHANTOM";            break;
   default:
     out <<"unknown ("<< st.state;
   }

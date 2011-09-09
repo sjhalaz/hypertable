@@ -127,12 +127,23 @@ namespace Hypertable {
 
     void set_verbose_flag(bool verbose) { m_verbose = verbose; }
 
+    void player_complete(int64_t op_id, int type, const String &location,
+                         uint32_t attempt, const map<uint32_t, int> &error_map, Timer *timer=0);
+
+    void phantom_prepare_complete(int64_t op_id, uint32_t attempt,
+        const map<QualifiedRangeSpec, int> &error_map, Timer *timer=0);
+
+    void phantom_commit_complete(int64_t op_id, uint32_t attempt,
+        const map<QualifiedRangeSpec, int> &error_map, Timer *timer=0);
+
+
   private:
     friend class MasterClientHyperspaceSessionCallback;
 
     void hyperspace_disconnected();
     void hyperspace_reconnected();
-    void send_message_async(CommBufPtr &cbp, DispatchHandler *handler, Timer *timer, const String &label);
+    void send_message_async(CommBufPtr &cbp, DispatchHandler *handler, Timer *timer,
+        const String &label);
     bool send_message(CommBufPtr &cbp, Timer *timer, EventPtr &event, const String &label);
     void fetch_result(int64_t id, Timer *timer, EventPtr &event, const String &label);
     void initialize_hyperspace();

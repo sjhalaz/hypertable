@@ -34,6 +34,7 @@ const char *Dependency::SERVERS = "SERVERS";
 const char *Dependency::ROOT = "ROOT";
 const char *Dependency::METADATA = "METADATA";
 const char *Dependency::SYSTEM = "SYSTEM";
+const char *Dependency::RECOVER_SERVER = "RECOVER_SERVER";
 
 
 const char *OperationState::get_text(int32_t state);
@@ -195,13 +196,13 @@ size_t Operation::encoded_result_length() const {
   return 4 + Serialization::encoded_length_vstr(m_error_msg);
 }
 
-void Operation::encode_result(uint8_t **bufp) const { 
+void Operation::encode_result(uint8_t **bufp) const {
   Serialization::encode_i32(bufp, m_error);
   if (m_error != Error::OK)
     Serialization::encode_vstr(bufp, m_error_msg);
 }
 
-void Operation::decode_result(const uint8_t **bufp, size_t *remainp) { 
+void Operation::decode_result(const uint8_t **bufp, size_t *remainp) {
   m_error = Serialization::decode_i32(bufp, remainp);
   if (m_error != Error::OK)
     m_error_msg = Serialization::decode_vstr(bufp, remainp);
@@ -210,7 +211,7 @@ void Operation::decode_result(const uint8_t **bufp, size_t *remainp) {
 
 void Operation::complete_error(int error, const String &msg) {
   {
-    ScopedLock lock(m_mutex); 
+    ScopedLock lock(m_mutex);
     m_state = OperationState::COMPLETE;
     m_error = error;
     m_error_msg = msg;
@@ -223,7 +224,7 @@ void Operation::complete_error(int error, const String &msg) {
 }
 
 void Operation::complete_error_no_log(int error, const String &msg) {
-  ScopedLock lock(m_mutex); 
+  ScopedLock lock(m_mutex);
   m_state = OperationState::COMPLETE;
   m_error = error;
   m_error_msg = msg;
@@ -242,7 +243,7 @@ void Operation::complete_ok() {
 }
 
 void Operation::complete_ok_no_log() {
-  ScopedLock lock(m_mutex); 
+  ScopedLock lock(m_mutex);
   m_state = OperationState::COMPLETE;
   m_error = Error::OK;
   m_dependencies.clear();
@@ -315,6 +316,7 @@ namespace {
     { OperationState::UPDATE_HYPERSPACE, "UPDATE_HYPERSPACE" },
     { OperationState::ACKNOWLEDGE, "ACKNOWLEDGE" },
     { OperationState::FINALIZE, "FINALIZE" },
+    { OperationState::PREPARE, "PREPARE" },
     { 0, 0 }
   };
 

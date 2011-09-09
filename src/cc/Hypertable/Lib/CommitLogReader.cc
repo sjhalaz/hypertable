@@ -76,6 +76,22 @@ CommitLogReader::CommitLogReader(FilesystemPtr &fs, const String &log_dir, bool 
   reset();
 }
 
+CommitLogReader::CommitLogReader(FilesystemPtr &fs, const String &log_dir,
+    const vector<uint32_t> &fragment_filter)
+  : CommitLogBase(log_dir), m_fs(fs), m_fragment_queue_offset(0),
+    m_block_buffer(256), m_revision(TIMESTAMP_MIN), m_compressor(0) {
+
+  if (get_bool("Hypertable.CommitLog.SkipErrors"))
+    CommitLogBlockStream::ms_assert_on_error = false;
+
+  foreach(uint32_t fragment, fragment_filter)
+    m_fragment_filter.insert(fragment);
+
+  load_fragments(log_dir, false);
+  reset();
+}
+
+
 
 CommitLogReader::~CommitLogReader() {
 }
@@ -131,6 +147,11 @@ CommitLogReader::next_raw_block(CommitLogBlockInfo *infop,
   return true;
 }
 
+void CommitLogReader::get_fragment_ids(vector<uint32_t> &ids) {
+  foreach(const CommitLogFileInfo &fragment, m_fragment_queue) {
+    ids.push_back(fragment.num);
+  }
+}
 
 bool
 CommitLogReader::next(const uint8_t **blockp, size_t *lenp,
@@ -216,6 +237,10 @@ void CommitLogReader::load_fragments(String log_dir, bool mark_for_deletion) {
 
     char *endptr;
     long num = strtol(listing[i].c_str(), &endptr, 10);
+    if (m_fragment_filter.size())
+      if (m_fragment_filter.find(num) == m_fragment_filter.end())
+        continue;
+
     if (*endptr != 0) {
       HT_WARNF("Invalid file '%s' found in commit log directory '%s'",
                listing[i].c_str(), log_dir.c_str());

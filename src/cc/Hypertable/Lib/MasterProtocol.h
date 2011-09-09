@@ -38,22 +38,25 @@ namespace Hypertable {
 
   public:
 
-    static const uint64_t COMMAND_CREATE_TABLE          = 0;
-    static const uint64_t COMMAND_GET_SCHEMA            = 1;
-    static const uint64_t COMMAND_STATUS                = 2;
-    static const uint64_t COMMAND_REGISTER_SERVER       = 3;
-    static const uint64_t COMMAND_MOVE_RANGE            = 4;
-    static const uint64_t COMMAND_DROP_TABLE            = 5;
-    static const uint64_t COMMAND_ALTER_TABLE           = 6;
-    static const uint64_t COMMAND_SHUTDOWN              = 7;
-    static const uint64_t COMMAND_CLOSE                 = 8;
-    static const uint64_t COMMAND_CREATE_NAMESPACE      = 9;
-    static const uint64_t COMMAND_DROP_NAMESPACE        = 10;
-    static const uint64_t COMMAND_RENAME_TABLE          = 11;
-    static const uint64_t COMMAND_RELINQUISH_ACKNOWLEDGE= 12;
-    static const uint64_t COMMAND_FETCH_RESULT          = 13;
-    static const uint64_t COMMAND_BALANCE               = 14;
-    static const uint64_t COMMAND_MAX                   = 15;
+    static const uint64_t COMMAND_CREATE_TABLE                = 0;
+    static const uint64_t COMMAND_GET_SCHEMA                  = 1;
+    static const uint64_t COMMAND_STATUS                      = 2;
+    static const uint64_t COMMAND_REGISTER_SERVER             = 3;
+    static const uint64_t COMMAND_MOVE_RANGE                  = 4;
+    static const uint64_t COMMAND_DROP_TABLE                  = 5;
+    static const uint64_t COMMAND_ALTER_TABLE                 = 6;
+    static const uint64_t COMMAND_SHUTDOWN                    = 7;
+    static const uint64_t COMMAND_CLOSE                       = 8;
+    static const uint64_t COMMAND_CREATE_NAMESPACE            = 9;
+    static const uint64_t COMMAND_DROP_NAMESPACE              = 10;
+    static const uint64_t COMMAND_RENAME_TABLE                = 11;
+    static const uint64_t COMMAND_RELINQUISH_ACKNOWLEDGE      = 12;
+    static const uint64_t COMMAND_FETCH_RESULT                = 13;
+    static const uint64_t COMMAND_BALANCE                     = 14;
+    static const uint64_t COMMAND_PLAYER_COMPLETE             = 15;
+    static const uint64_t COMMAND_PHANTOM_PREPARE_COMPLETE    = 16;
+    static const uint64_t COMMAND_PHANTOM_COMMIT_COMPLETE     = 17;
+    static const uint64_t COMMAND_MAX                         = 18;
 
     static const char *m_command_strings[];
 
@@ -89,6 +92,15 @@ namespace Hypertable {
     static CommBuf *create_shutdown_request();
 
     static CommBuf *create_balance_request(BalancePlan &plan);
+
+    static CommBuf *create_player_complete_request(int64_t op_id, uint32_t attempt,
+        const map<uint32_t, int> &error_map);
+
+    static CommBuf *create_phantom_prepare_complete_request(int64_t op_id, uint32_t attempt,
+        const map<QualifiedRangeSpec, int> &error_map);
+
+    static CommBuf *create_phantom_commit_complete_request(int64_t op_id, uint32_t attempt,
+        const map<QualifiedRangeSpec, int> &error_map);
 
     virtual const char *command_text(uint64_t command);
 

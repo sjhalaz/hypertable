@@ -279,7 +279,10 @@ void create_table_load_range(ContextPtr &context, const String &location, TableI
   }
 
   try {
-    rsc.acknowledge_load(addr, *table, range);
+    QualifiedRangeSpec qrs(*table, range);
+    vector<QualifiedRangeSpec *> range_vec;
+    range_vec.push_back(&qrs);
+    rsc.acknowledge_load(addr, range_vec);
   }
   catch (Exception &e) {
     if (e.code() != Error::RANGESERVER_TABLE_DROPPED &&

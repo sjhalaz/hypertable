@@ -1,5 +1,5 @@
 /** -*- c++ -*-
- * Copyright (C) 2008 Doug Judd (Zvents, Inc.)
+ * Copyright (C) 2011 Hypertable, Inc.
  *
  * This file is part of Hypertable.
  *
@@ -60,7 +60,7 @@ bool TableIdentifier::operator<(const TableIdentifier &other) const {
   }
   int cmpval = strcmp(id, other.id);
 
-  if (cmpval < 0 || 
+  if (cmpval < 0 ||
       (cmpval == 0 && generation < other.generation))
     return true;
   return false;
@@ -85,6 +85,22 @@ void TableIdentifier::decode(const uint8_t **bufp, size_t *remainp) {
 void TableIdentifierManaged::decode(const uint8_t **bufp, size_t *remainp) {
   TableIdentifier::decode(bufp, remainp);
   *this = *this;
+}
+
+String RangeSpec::type_str(int type) {
+  switch(type) {
+  case (ROOT):
+    return (String) "root";
+  case (METADATA):
+    return (String) "metadata";
+  case (SYSTEM):
+    return (String) "system";
+  case (USER):
+    return "user";
+  case (UNKNOWN):
+    return "unknown";
+  }
+  return "unknown";
 }
 
 bool RangeSpec::operator==(const RangeSpec &other) const {
@@ -164,6 +180,57 @@ void RangeSpecManaged::decode(const uint8_t **bufp, size_t *remainp) {
   *this = *this;
 }
 
+bool QualifiedRangeSpec::operator<(const QualifiedRangeSpec &other) const {
+  if (table == other.table)
+    return (range < other.range);
+  else
+    return (table < other.table);
+}
+
+bool QualifiedRangeSpec::operator==(const QualifiedRangeSpec &other) const {
+  return (table == other.table && range == other.range);
+}
+
+size_t QualifiedRangeSpec::encoded_length() const {
+  return (table.encoded_length() + range.encoded_length());
+}
+
+void QualifiedRangeSpec::encode(uint8_t **bufp) const {
+  table.encode(bufp);
+  range.encode(bufp);
+}
+
+void QualifiedRangeSpec::decode(const uint8_t **bufp, size_t *remainp) {
+  HT_TRY("decoding qualified range spec managed ",
+    table.decode(bufp, remainp);
+    range.decode(bufp, remainp));
+}
+
+bool QualifiedRangeSpecManaged::operator<(const QualifiedRangeSpecManaged &other) const {
+  if (table == other.table)
+    return (range < other.range);
+  else
+    return (table < other.table);
+}
+
+size_t QualifiedRangeSpecManaged::encoded_length() const {
+  return (m_table.encoded_length() + m_range.encoded_length());
+}
+
+void QualifiedRangeSpecManaged::encode(uint8_t **bufp) const {
+  m_table.encode(bufp);
+  m_range.encode(bufp);
+}
+
+void QualifiedRangeSpecManaged::decode(const uint8_t **bufp, size_t *remainp) {
+  HT_TRY("decoding qualified range spec managed ",
+    m_table.decode(bufp, remainp);
+    m_range.decode(bufp, remainp));
+  table = m_table;
+  range = m_range;
+}
+
+
 ostream &Hypertable::operator<<(ostream &os, const TableIdentifier &tid) {
   os <<"{TableIdentifier: id='"<< tid.id
      <<"' generation="<< tid.generation <<"}";
@@ -177,6 +244,16 @@ ostream &Hypertable::operator<<(ostream &os, const RangeSpec &range) {
   HT_DUMP_CSTR(os, end, range.end_row);
 
   os <<'}';
+  return os;
+}
+
+ostream &Hypertable::operator<<(ostream &os, const QualifiedRangeSpec &qualified_range) {
+  os << qualified_range.table << qualified_range.range;
+  return os;
+}
+
+ostream &Hypertable::operator<<(ostream &os, const QualifiedRangeSpecManaged &qualified_range) {
+  os << qualified_range.m_table << qualified_range.m_range;
   return os;
 }
 

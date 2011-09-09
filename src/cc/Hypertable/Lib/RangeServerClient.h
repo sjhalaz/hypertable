@@ -36,7 +36,7 @@
 #include "RangeState.h"
 #include "Types.h"
 #include "StatsRangeServer.h"
-
+#include "RangeServerRecoveryPlan.h"
 
 namespace Hypertable {
 
@@ -97,6 +97,7 @@ namespace Hypertable {
     void metadata_sync(const CommAddress &addr, const String &table_id, uint32_t flags,
                        std::vector<String> &columns);
 
+
     /** Issues a synchronous "load range" request.
      *
      * @param addr address of RangeServer
@@ -127,21 +128,18 @@ namespace Hypertable {
     /** Issues a synchronous "acknowledge load" request.
      *
      * @param addr address of RangeServer
-     * @param table table identifier
-     * @param range range specification
+     * @param ranges qualified range spec
      */
-    void acknowledge_load(const CommAddress &addr, const TableIdentifier &table,
-                          const RangeSpec &range);
+    void acknowledge_load(const CommAddress &addr, const vector<QualifiedRangeSpec*> &ranges);
 
-    /** Issues a synchronous "load range" request with timer.
+    /** Issues a synchronous "acknowledge load" request with timer.
      *
      * @param addr address of RangeServer
-     * @param table table identifier
-     * @param range range specification
+     * @param ranges qualified range specifications
      * @param timer timer
      */
-    void acknowledge_load(const CommAddress &addr, const TableIdentifier &table,
-                          const RangeSpec &range, Timer &timer);
+    void acknowledge_load(const CommAddress &addr, const vector<QualifiedRangeSpec*> &ranges,
+                          Timer &timer);
 
     /** Issues an "update" request asynchronously.  The data argument holds a
      * sequence of key/value pairs.  Each key/value pair is encoded as two
@@ -617,6 +615,69 @@ namespace Hypertable {
      * @param outfile output file to dump heap stats to
      */
     void heapcheck(const CommAddress &addr, String &outfile);
+
+    /** Issues a synchronous "play_fragments" request.
+     * @param addr address of RangeServer
+     * @param op_id id of the calling recovery operation
+     * @param attempt id of the replay attempt -- needed in case of master failure
+     * @param recover_location location of the server being recovered
+     * @param type type of fragments to play
+     * @param fragments fragments being requested for replay
+     * @param load_plan recovery load plan
+     * @param replay_timeout timeout for replay to finish
+     */
+    void play_fragments(const CommAddress &addr, int64_t op_id, uint32_t attempt,
+                        const String &recover_location, int type,
+                        const vector<uint32_t> &fragments,
+                        const RangeServerRecoveryLoadPlan &load_plan, uint32_t replay_timeout);
+
+    /** Issues a "phantom_load" synchronous request.
+     *
+     * @param addr address of RangeServer
+     * @param location location of server being recovered
+     * @param fragments fragments being replayed
+     * @param range range spec to be loaded
+     */
+    void phantom_load(const CommAddress &addr, const String &location,
+                      const vector<uint32_t> &fragments,
+                      const vector<QualifiedRangeSpec> &ranges);
+
+    /** Issues a "phantom_update" asynchronous request.
+     *
+     * @param addr address of RangeServer
+     * @param location location being recovered
+     * @param range range
+     * @param fragment fragment_id
+     * @param more indicates whether thes fragment is complete or not
+     * @param replay_buffer replay buffer
+     * @param handler handler
+     */
+    void phantom_update(const CommAddress &addr, const String &location,
+                        const QualifiedRangeSpec &range,
+                        uint32_t fragment, bool more, StaticBuffer &updates,
+                        DispatchHandler *handler);
+
+    /** Issues a "phantom_prepare_ranges" synchronous request.
+     *
+     * @param addr address of RangeServer
+     * @param location location of server being recovered
+     * @param attempt id of the replay attempt -- needed in case of master failure
+     * @param range range spec to be loaded
+     */
+    void phantom_prepare_ranges(const CommAddress &addr, int64_t op_id, uint32_t attempt,
+                                const String &location,
+                                const vector<QualifiedRangeSpec> &ranges, uint32_t timeout);
+
+    /** Issues a "phantom_commit_ranges" synchronous request.
+     *
+     * @param addr address of RangeServer
+     * @param location location of server being recovered
+     * @param attempt id of the replay attempt -- needed in case of master failure
+     * @param range range spec to be loaded
+     */
+    void phantom_commit_ranges(const CommAddress &addr, int64_t op_id, uint32_t attempt,
+                               const String &location, const vector<QualifiedRangeSpec> &ranges,
+                               uint32_t timeout);
 
 
   private:

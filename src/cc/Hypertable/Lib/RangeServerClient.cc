@@ -127,11 +127,11 @@ RangeServerClient::do_load_range(const CommAddress &addr,
 }
 
 void
-RangeServerClient::acknowledge_load(const CommAddress &addr, const TableIdentifier &table,
-                                    const RangeSpec &range) {
+RangeServerClient::acknowledge_load(const CommAddress &addr,
+                                    const vector<QualifiedRangeSpec*> &ranges) {
   DispatchHandlerSynchronizer sync_handler;
   EventPtr event;
-  CommBufPtr cbp(RangeServerProtocol::create_request_acknowledge_load(table, range));
+  CommBufPtr cbp(RangeServerProtocol::create_request_acknowledge_load(ranges));
 
   send_message(addr, cbp, &sync_handler, m_default_timeout_ms);
 
@@ -143,11 +143,12 @@ RangeServerClient::acknowledge_load(const CommAddress &addr, const TableIdentifi
 }
 
 void
-RangeServerClient::acknowledge_load(const CommAddress &addr, const TableIdentifier &table,
-                                    const RangeSpec &range, Timer &timer) {
+RangeServerClient::acknowledge_load(const CommAddress &addr,
+                                    const vector<QualifiedRangeSpec*> &ranges) {
+
   DispatchHandlerSynchronizer sync_handler;
   EventPtr event;
-  CommBufPtr cbp(RangeServerProtocol::create_request_acknowledge_load(table, range));
+  CommBufPtr cbp(RangeServerProtocol::create_request_acknowledge_load(ranges));
 
   send_message(addr, cbp, &sync_handler, timer.remaining());
 
@@ -665,7 +666,73 @@ void RangeServerClient::heapcheck(const CommAddress &addr, String &outfile) {
              + Protocol::string_format_message(event));
 }
 
+void RangeServerClient::play_fragments(const CommAddress &addr, int64_t op_id, uint32_t attempt,
+    const String &recover_location, int type, const vector<uint32_t> &fragments,
+    const RangeServerRecoveryLoadPlan &load_plan, uint32_t timeout_ms) {
+  DispatchHandlerSynchronizer sync_handler;
+  EventPtr event;
+  CommBufPtr cbp(RangeServerProtocol::create_request_play_fragments(op_id, attempt,
+      recover_location, type, fragments, load_plan, timeout_ms));
+  send_message(addr, cbp, &sync_handler, m_default_timeout_ms);
 
+  if (!sync_handler.wait_for_reply(event))
+    HT_THROW((int)Protocol::response_code(event),
+             String("RangeServer play_fragments() failure : ")
+             + Protocol::string_format_message(event));
+
+}
+
+void RangeServerClient::phantom_load(const CommAddress &addr, const String &location,
+    const vector<uint32_t> &fragments, const vector<QualifiedRangeSpec> &ranges) {
+  DispatchHandlerSynchronizer sync_handler;
+  EventPtr event;
+  CommBufPtr cbp(RangeServerProtocol::create_request_phantom_load(location, fragments, ranges));
+  send_message(addr, cbp, &sync_handler, m_default_timeout_ms);
+
+  if (!sync_handler.wait_for_reply(event))
+    HT_THROW((int)Protocol::response_code(event),
+             String("RangeServer phantom_load() failure : ")
+             + Protocol::string_format_message(event));
+}
+
+void RangeServerClient::phantom_update(const CommAddress &addr, const String &location,
+    const QualifiedRangeSpec &range, uint32_t fragment, bool more, StaticBuffer &buffer,
+    DispatchHandler *handler) {
+  CommBufPtr cbp(RangeServerProtocol::create_request_replay_update(range, location, fragment,
+                 more, buffer));
+  send_message(addr, cbp, handler, m_default_timeout_ms);
+}
+
+void RangeServerClient::phantom_prepare_ranges(const CommAddress &addr, int64_t op_id,
+    uint32_t attempt, const String &location, const vector<QualifiedRangeSpec> &ranges,
+    uint32_t timeout_ms) {
+  DispatchHandlerSynchronizer sync_handler;
+  EventPtr event;
+  CommBufPtr cbp(RangeServerProtocol::create_request_phantom_prepare_ranges(op_id, attempt,
+      location, ranges, timeout));
+  send_message(addr, cbp, &sync_handler, timeout_ms);
+
+  if (!sync_handler.wait_for_reply(event))
+    HT_THROW((int)Protocol::response_code(event),
+             String("RangeServer phantom_prepare_ranges() failure : ")
+             + Protocol::string_format_message(event));
+
+}
+
+void RangeServerClient::phantom_commit_ranges(const CommAddress &addr, int64_t op_id,
+    uint32_t attempt, const String &location, const vector<QualifiedRangeSpec> &ranges,
+    uint32_t timeout_ms) {
+  DispatchHandlerSynchronizer sync_handler;
+  EventPtr event;
+  CommBufPtr cbp(RangeServerProtocol::create_request_phantom_commit_ranges(op_id, attempt,
+      location, ranges, timeout));
+  send_message(addr, cbp, &sync_handler, timeout_ms);
+
+  if (!sync_handler.wait_for_reply(event))
+    HT_THROW((int)Protocol::response_code(event),
+             String("RangeServer phantom_commit_ranges() failure : ")
+             + Protocol::string_format_message(event));
+}
 
 void
 RangeServerClient::send_message(const CommAddress &addr, CommBufPtr &cbp,

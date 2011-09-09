@@ -886,6 +886,84 @@ void MasterClient::fetch_result(int64_t id, Timer *timer, EventPtr &event, const
   }
 }
 
+void
+MasterClient::player_complete(int64_t op_id, int type, const String &location,
+    uint32_t attempt, const map<uint32_t, int> &error_map, Timer *timer) {
+  Timer tmp_timer(m_timeout_ms);
+  CommBufPtr cbp;
+  EventPtr event;
+  int64_t id = 0;
+  String label =
+    format("player_complete op_id=%llu type=%d location=%s attempt=%d num_fragments=%d",
+        (Llu)op_id, type, location.c_str(), attempt, error_map.size());
+
+  initialize(timer, tmp_timer);
+  while (!timer->expired()) {
+    cbp = MasterProtocol::create_player_complete_request(op_id, attempt, error_map);
+    if (!send_message(cbp, timer, event, label))
+      continue;
+    return;
+  }
+
+  {
+    ScopedLock lock(m_mutex);
+    HT_THROWF(Error::REQUEST_TIMEOUT,
+        "MasterClient operation %s to master %s failed", label.c_str(),
+        m_master_addr.format().c_str());
+  }
+}
+
+void
+MasterClient::phantom_prepare_complete(int64_t op_id, uint32_t attempt, const String &location,
+    const map<uint32_t, int> &error_map, Timer *timer) {
+  Timer tmp_timer(m_timeout_ms);
+  CommBufPtr cbp;
+  EventPtr event;
+  String label =
+    format("phantom_prepare_complete op_id=%llu location=%s attempt=%d num_ranges=%d",
+        (Llu)op_id, location.c_str(), attempt, error_map.size());
+
+  initialize(timer, tmp_timer);
+  while (!timer->expired()) {
+    cbp = MasterProtocol::create_phantom_prepare_complete_request(op_id, attempt, error_map);
+    if (!send_message(cbp, timer, event, label))
+      continue;
+    return;
+  }
+
+  {
+    ScopedLock lock(m_mutex);
+    HT_THROWF(Error::REQUEST_TIMEOUT,
+        "MasterClient operation %s to master %s failed", label.c_str(),
+        m_master_addr.format().c_str());
+  }
+}
+
+void
+MasterClient::phantom_commit_complete(int64_t op_id, uint32_t attempt, const String &location,
+    const map<uint32_t, int> &error_map, Timer *timer) {
+  Timer tmp_timer(m_timeout_ms);
+  CommBufPtr cbp;
+  EventPtr event;
+  String label =
+    format("phantom_commit_complete op_id=%llu location=%s attempt=%d num_ranges=%d",
+        (Llu)op_id, location.c_str(), attempt, error_map.size());
+
+  initialize(timer, tmp_timer);
+  while (!timer->expired()) {
+    cbp = MasterProtocol::create_phantom_commit_complete_request(op_id, attempt, error_map);
+    if (!send_message(cbp, timer, event, label))
+      continue;
+    return;
+  }
+
+  {
+    ScopedLock lock(m_mutex);
+    HT_THROWF(Error::REQUEST_TIMEOUT,
+        "MasterClient operation %s to master %s failed", label.c_str(),
+        m_master_addr.format().c_str());
+  }
+}
 
 void MasterClient::reload_master() {
   InetAddr master_addr;

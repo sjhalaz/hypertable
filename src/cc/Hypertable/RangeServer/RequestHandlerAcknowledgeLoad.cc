@@ -23,13 +23,14 @@
 #include "Common/Error.h"
 #include "Common/Logger.h"
 
-#include "AsyncComm/ResponseCallback.h"
+#include "ResponseCallbackAcknowledgeLoad.h"
 #include "Common/Serialization.h"
 
 #include "Hypertable/Lib/Types.h"
 
 #include "RangeServer.h"
 #include "RequestHandlerAcknowledgeLoad.h"
+#include "ResponseCallbackAcknowledgeLoad.h"
 
 using namespace Hypertable;
 using namespace Serialization;
@@ -38,16 +39,20 @@ using namespace Serialization;
  *
  */
 void RequestHandlerAcknowledgeLoad::run() {
-  ResponseCallback cb(m_comm, m_event_ptr);
-  TableIdentifier table;
-  RangeSpec range;
+  ResponseCallbackAcknowledgeLoad cb(m_comm, m_event_ptr);
+  vector<QualifiedRangeSpec> ranges;
+  QualifiedRangeSpec range;
   const uint8_t *decode_ptr = m_event_ptr->payload;
   size_t decode_remain = m_event_ptr->payload_len;
+  int nn;
 
   try {
-    table.decode(&decode_ptr, &decode_remain);
-    range.decode(&decode_ptr, &decode_remain);
-    m_range_server->acknowledge_load(&cb, &table, &range);
+    nn = Serialization::decode_i32(&decode_ptr, &decode_remain);
+    for (int ii=0; ii<nn; ++ii) {
+      range.decode(&decode_ptr, &decode_remain);
+      ranges.push_back(range);
+    }
+    m_range_server->acknowledge_load(&cb, &ranges);
   }
   catch (Exception &e) {
     HT_ERROR_OUT << "AcknowledgeLoad " << e << HT_END;

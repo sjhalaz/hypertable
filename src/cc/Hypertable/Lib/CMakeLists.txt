@@ -69,6 +69,8 @@ RangeLocator.cc
 RangeMoveSpec.cc
 RangeServerClient.cc
 RangeServerProtocol.cc
+RangeServerRecoveryLoadPlan.cc
+RangeServerRecoveryReplayPlan.cc
 RangeState.cc
 Result.cc
 RootFileHandler.cc

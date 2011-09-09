@@ -108,10 +108,15 @@ RequestHandlerUpdate.cc
 RequestHandlerWaitForMaintenance.cc
 RequestHandlerClose.cc
 RequestHandlerCommitLogSync.cc
+RequestHandlerPlayFragments.cc
+RequestHandlerPhantomLoad.cc
 ResponseCallbackCreateScanner.cc
 ResponseCallbackFetchScanblock.cc
 ResponseCallbackGetStatistics.cc
 ResponseCallbackUpdate.cc
+RangeReplayBuffer.cc
+ReplayBuffer.cc
+ReplayDispatchHandler.cc
 ScanContext.cc
 ScannerMap.cc
 TableIdCache.cc

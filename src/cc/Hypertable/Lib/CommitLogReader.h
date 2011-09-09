@@ -1,5 +1,5 @@
 /** -*- c++ -*-
- * Copyright (C) 2008 Doug Judd (Zvents, Inc.)
+ * Copyright (C) 2011 Hypertable, Inc.
  *
  * This file is part of Hypertable.
  *
@@ -24,6 +24,7 @@
 
 #include <stack>
 #include <vector>
+#include <set>
 
 #include <boost/thread/mutex.hpp>
 
@@ -41,11 +42,16 @@
 
 namespace Hypertable {
 
+  using namespace std;
   class CommitLogReader : public CommitLogBase {
 
   public:
     CommitLogReader(FilesystemPtr &fs, const String &log_dir, bool mark_for_deletion=false);
+    CommitLogReader(FilesystemPtr &fs, const String &log_dir,
+        const vector<uint32_t> &fragment_filter);
     virtual ~CommitLogReader();
+
+    void get_fragment_ids(vector<uint32_t> &ids);
 
     bool next_raw_block(CommitLogBlockInfo *,
                         BlockCompressionHeaderCommitLog *);
@@ -57,6 +63,10 @@ namespace Hypertable {
       m_block_buffer.clear();
       m_revision = TIMESTAMP_MIN;
       m_latest_revision = TIMESTAMP_MIN;
+    }
+
+    uint32_t get_current_fragment_id() const {
+      return m_fragment_queue[m_fragment_queue_offset].num;
     }
 
   private:
@@ -74,7 +84,7 @@ namespace Hypertable {
     CompressorMap          m_compressor_map;
     uint16_t               m_compressor_type;
     BlockCompressionCodec *m_compressor;
-
+    set<uint64_t>          m_fragment_filter;
   };
 
   typedef intrusive_ptr<CommitLogReader> CommitLogReaderPtr;

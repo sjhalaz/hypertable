@@ -56,7 +56,9 @@ namespace Hypertable {
       ISSUE_REQUESTS = 14,
       UPDATE_HYPERSPACE = 15,
       ACKNOWLEDGE = 16,
-      FINALIZE = 17
+      FINALIZE = 17,
+      PHANTOM_LOAD = 18,
+      PHANTOM_COMMIT = 19
     };
     const char *get_text(int state);
   }
@@ -67,6 +69,7 @@ namespace Hypertable {
     extern const char *ROOT;
     extern const char *METADATA;
     extern const char *SYSTEM;
+    extern const char *RECOVER_SERVER;
   }
 
   namespace NamespaceFlag {
