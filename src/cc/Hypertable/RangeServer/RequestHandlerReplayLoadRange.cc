@@ -27,8 +27,8 @@
 #include "Common/Serialization.h"
 
 #include "Hypertable/Lib/Types.h"
+#include "Hypertable/Lib/MetaLogEntityRange.h"
 
-#include "MetaLogEntityRange.h"
 #include "RangeServer.h"
 #include "RequestHandlerReplayLoadRange.h"
 

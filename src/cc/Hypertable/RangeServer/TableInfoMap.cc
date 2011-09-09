@@ -111,10 +111,16 @@ void TableInfoMap::merge(TableInfoMapPtr &table_info_map_ptr) {
   InfoMap::iterator from_iter, to_iter;
   std::vector<RangePtr> range_vec;
 
+  //HT_DEBUGF("Merging table_info_map %p into %p",
+  //      (void *)table_info_map_ptr.get(), (void *)this);
+
   for (from_iter = table_info_map_ptr->m_map.begin();
        from_iter != table_info_map_ptr->m_map.end(); ++from_iter) {
 
     to_iter = m_map.find( (*from_iter).first );
+
+    //HT_DEBUGF("Merging table_info %p into %p",
+    //    (void *)((*from_iter).second.get()), (void *)((*to_iter).second.get()));
 
     if (to_iter == m_map.end()) {
       m_map[ (*from_iter).first ] = (*from_iter).second;

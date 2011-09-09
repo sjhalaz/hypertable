@@ -48,7 +48,7 @@ OperationDropTable::OperationDropTable(ContextPtr &context,
   : Operation(context, header_) {
 }
 
-OperationDropTable::OperationDropTable(ContextPtr &context, EventPtr &event) 
+OperationDropTable::OperationDropTable(ContextPtr &context, EventPtr &event)
   : Operation(context, event, MetaLog::EntityType::OPERATION_DROP_TABLE) {
   const uint8_t *ptr = event->payload;
   size_t remaining = event->payload_len;
@@ -63,6 +63,7 @@ void OperationDropTable::initialize_dependencies() {
   m_dependencies.insert(Dependency::INIT);
   m_dependencies.insert(Dependency::METADATA);
   m_dependencies.insert(Dependency::SYSTEM);
+  m_dependencies.insert(Dependency::RECOVER_SERVER);
 }
 
 void OperationDropTable::execute() {

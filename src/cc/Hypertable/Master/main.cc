@@ -148,6 +148,7 @@ int main(int argc, char **argv) {
     MetaLog::ReaderPtr mml_reader;
     OperationPtr operation;
     RangeServerConnectionPtr rsc;
+    StringSet locations;
     String log_dir = context->toplevel_dir + "/servers/master/log/" + context->mml_definition->name();
 
     mml_reader = new MetaLog::Reader(context->dfs, context->mml_definition, log_dir);
@@ -190,6 +191,7 @@ int main(int argc, char **argv) {
         rsc->set_mml_writer(context->mml_writer);
         context->add_server(rsc);
         HT_ASSERT(rsc);
+        locations.insert(rsc->location());
         operations.push_back( new OperationRecoverServer(context, rsc) );
       }
     }
@@ -226,9 +228,7 @@ int main(int argc, char **argv) {
 
     ConnectionHandlerFactoryPtr hf(new HandlerFactory(context));
     InetAddr listen_addr(INADDR_ANY, port);
-
     context->comm->listen(listen_addr, hf);
-
     context->op->join();
     context->comm->close_socket(listen_addr);
 

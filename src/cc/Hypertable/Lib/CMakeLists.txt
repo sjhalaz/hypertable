@@ -58,8 +58,10 @@ MasterClient.cc
 MasterFileHandler.cc
 MasterProtocol.cc
 MetaLog.cc
+MetaLogDefinitionRangeServer.cc
 MetaLogEntity.cc
 MetaLogEntityHeader.cc
+MetaLogEntityRange.cc
 MetaLogReader.cc
 MetaLogWriter.cc
 NameIdMapper.cc
@@ -69,6 +71,8 @@ RangeLocator.cc
 RangeMoveSpec.cc
 RangeServerClient.cc
 RangeServerProtocol.cc
+RangeServerRecoveryReceiverPlan.cc
+RangeServerRecoveryReplayPlan.cc
 RangeState.cc
 Result.cc
 RootFileHandler.cc

@@ -24,7 +24,7 @@
 
 #include "Common/ReferenceCount.h"
 
-#include "Hypertable/Lib/MetaLogDefinition.h"
+#include "MetaLogDefinition.h"
 
 namespace Hypertable {
   namespace MetaLog {

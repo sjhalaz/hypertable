@@ -302,6 +302,13 @@ void DefaultPolicy::init_options() {
         "Includes master hash (host:port) in RangeServer location id")
     ("Hypertable.Master.Split.SoftLimitEnabled", boo()->default_value(true),
         "Enable aggressive splitting of tables with little data to spread out ranges")
+    ("Hypertable.Master.FailedRangeServerLimit.Percentage", i32()->default_value(80),
+        "Fail hard if less than this percentage of the RangeServers are unavailable "
+        "at a given time")
+    ("Hypertable.Failover.GracePeriod", i32()->default_value(180000),
+        "Master wait this long before trying to recover a RangeServer")
+    ("Hypertable.Failover.Timeout", i32()->default_value(180000),
+        "Timeout for failover operations")
     ("Hypertable.RangeServer.AccessGroup.GarbageThreshold.Percentage",
      i32()->default_value(20), "Perform major compaction when garbage accounts "
      "for this percentage of the data")
@@ -378,6 +385,12 @@ void DefaultPolicy::init_options() {
         "Commit log compressor to use (zlib, lzo, quicklz, snappy, bmz, none)")
     ("Hypertable.RangeServer.UpdateCoalesceLimit", i64()->default_value(5*M),
         "Amount of update data to coalesce into single commit log sync")
+    ("Hypertable.RangeServer.Failover.FlushLimit.PerRange",
+     i32()->default_value(10*M), "Amount of updates (bytes) accumulated for a "
+        "single range to trigger a replay buffer flush")
+    ("Hypertable.RangeServer.Failover.FlushLimit.Aggregate",
+     i64()->default_value(100*M), "Amount of updates (bytes) accumulated for "
+        "all range to trigger a replay buffer flush")
     ("Hypertable.Metadata.Replication", i32()->default_value(-1),
         "Replication factor for commit log files")
     ("Hypertable.CommitLog.RollLimit", i64()->default_value(100*M),

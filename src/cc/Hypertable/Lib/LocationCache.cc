@@ -119,8 +119,6 @@ LocationCache::lookup(const char * table_name, const char *rowkey,
 
   assert(table_name);
 
-  //cout << table_name << " row=" << rowkey << endl << flush;
-
   key.table_name = table_name;
   key.end_row = rowkey;
 

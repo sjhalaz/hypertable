@@ -29,6 +29,7 @@
 
 namespace Hypertable {
   using namespace Serialization;
+  using namespace std;
 
   CommBuf *
   MasterProtocol::create_create_namespace_request(const String &name, int flags) {
@@ -167,6 +168,83 @@ namespace Hypertable {
     return cbuf;
   }
 
+  CommBuf *MasterProtocol::create_replay_complete_request(int64_t op_id, uint32_t attempt,
+      const map<uint32_t, int> &error_map) {
+    CommHeader header(COMMAND_REPLAY_COMPLETE);
+    size_t len = Serialization::encoded_length_vi64(op_id) +
+        Serialization::encoded_length_vi32(attempt) +
+        Serialization::encoded_length_vi32(error_map.size());
+
+    map<uint32_t, int>::const_iterator it = error_map.begin();
+    while(it != error_map.end()) {
+      len += Serialization::encoded_length_vi32(it->first) +
+             Serialization::encoded_length_vi32(it->second);
+      ++it;
+    }
+    CommBuf *cbuf = new CommBuf(header, len);
+    Serialization::encode_vi64(cbuf->get_data_ptr_address(), op_id);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), attempt);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), error_map.size());
+    it = error_map.begin();
+    while(it != error_map.end()) {
+      Serialization::encode_vi32(cbuf->get_data_ptr_address(), it->first);
+      Serialization::encode_vi32(cbuf->get_data_ptr_address(), it->second);
+      ++it;
+    }
+    return cbuf;
+  }
+
+  CommBuf *MasterProtocol::create_phantom_prepare_complete_request(int64_t op_id,
+      uint32_t attempt, const map<QualifiedRangeSpec, int> &error_map) {
+    CommHeader header(COMMAND_PHANTOM_PREPARE_COMPLETE);
+    size_t len = Serialization::encoded_length_vi64(op_id) +
+        Serialization::encoded_length_vi32(attempt) +
+        Serialization::encoded_length_vi32(error_map.size());
+
+    map<QualifiedRangeSpec, int>::const_iterator it = error_map.begin();
+    while(it != error_map.end()) {
+      len += it->first.encoded_length() + Serialization::encoded_length_vi32(it->second);
+      ++it;
+    }
+    CommBuf *cbuf = new CommBuf(header, len);
+    Serialization::encode_vi64(cbuf->get_data_ptr_address(), op_id);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), attempt);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), error_map.size());
+    it = error_map.begin();
+    while(it != error_map.end()) {
+      it->first.encode(cbuf->get_data_ptr_address());
+      Serialization::encode_vi32(cbuf->get_data_ptr_address(), it->second);
+      ++it;
+    }
+    return cbuf;
+  }
+
+  CommBuf *MasterProtocol::create_phantom_commit_complete_request(int64_t op_id,
+      uint32_t attempt, const map<QualifiedRangeSpec, int> &error_map) {
+    // XXX: TODO same as phantom prepare complete, consolidate code
+    CommHeader header(COMMAND_PHANTOM_COMMIT_COMPLETE);
+    size_t len = Serialization::encoded_length_vi64(op_id) +
+        Serialization::encoded_length_vi32(attempt) +
+        Serialization::encoded_length_vi32(error_map.size());
+
+    map<QualifiedRangeSpec, int>::const_iterator it = error_map.begin();
+    while(it != error_map.end()) {
+      len += it->first.encoded_length() + Serialization::encoded_length_vi32(it->second);
+      ++it;
+    }
+    CommBuf *cbuf = new CommBuf(header, len);
+    Serialization::encode_vi64(cbuf->get_data_ptr_address(), op_id);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), attempt);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), error_map.size());
+    it = error_map.begin();
+    while(it != error_map.end()) {
+      it->first.encode(cbuf->get_data_ptr_address());
+      Serialization::encode_vi32(cbuf->get_data_ptr_address(), it->second);
+      ++it;
+    }
+    return cbuf;
+  }
+
   const char *MasterProtocol::m_command_strings[] = {
     "create table",
     "get schema",
@@ -182,7 +260,10 @@ namespace Hypertable {
     "rename table",
     "relinquish acknowledge",
     "fetch result",
-    "balance"
+    "balance",
+    "player complete",
+    "phantom prepare complete",
+    "phantom commit complete"
   };
 
   const char *MasterProtocol::command_text(uint64_t command) {

@@ -22,9 +22,9 @@
 #ifndef HYPERTABLE_METALOGENTITYRANGE_H
 #define HYPERTABLE_METALOGENTITYRANGE_H
 
-#include "Hypertable/Lib/MetaLogEntity.h"
-#include "Hypertable/Lib/RangeState.h"
-#include "Hypertable/Lib/Types.h"
+#include "MetaLogEntity.h"
+#include "RangeState.h"
+#include "Types.h"
 
 namespace Hypertable {
   namespace MetaLog {

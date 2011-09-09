@@ -26,12 +26,14 @@
 #include "Common/StatsSystem.h"
 #include "Common/Path.h"
 #include "Common/md5.h"
+#include "Common/ScopeGuard.h"
 
 #include <boost/algorithm/string.hpp>
 
 #include "Hypertable/Lib/MasterProtocol.h"
 
 #include "LocationInitializer.h"
+#include "Hyperspace/Session.h"
 
 using namespace Hypertable;
 using namespace Serialization;
@@ -67,6 +69,25 @@ LocationInitializer::LocationInitializer(PropertiesPtr &props)
     }
   }
 
+}
+
+bool LocationInitializer::is_removed(const String &path, Hyperspace::SessionPtr &hyperspace) {
+  bool removed = false;
+  if (!m_location.empty()) {
+    String filename=path + "/" + m_location;
+    uint64_t handle=0;
+    HT_ON_SCOPE_EXIT(&Hyperspace::close_handle_ptr, hyperspace, &handle);
+    uint32_t oflags = Hyperspace::OPEN_FLAG_READ;
+    try {
+      handle = hyperspace->open(filename, oflags);
+      if (hyperspace->attr_exists(handle, "removed"))
+        removed = true;
+    }
+    catch (Exception &e) {
+      HT_INFO_OUT << e << HT_END;
+    }
+  }
+  return removed;
 }
 
 CommBuf *LocationInitializer::create_initialization_request() {

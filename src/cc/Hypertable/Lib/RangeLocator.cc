@@ -280,6 +280,10 @@ RangeLocator::find(const TableIdentifier *table, const char *row_key,
   RowInterval ri;
   bool inclusive = (row_key == 0 || *row_key == 0) ? true : false;
 
+  //HT_DEBUG_OUT << "Trying to locate " << table->id <<  "[" << row_key
+  //    << "]" << " hard=" << hard << " m_root_stale=" << m_root_stale << " root_addr="
+  //    << m_root_range_info.addr.to_str() << HT_END;
+
   if (m_root_stale) {
     if ((error = read_root_location(timer)) != Error::OK)
       return error;
@@ -342,12 +346,23 @@ RangeLocator::find(const TableIdentifier *table, const char *row_key,
     // meta_scan_spec.interval = ????;
 
     try {
+      //HT_DEBUG_OUT << "Trying to locate " << table->id <<  "[" << row_key
+      //    << "]" << " hard=" << hard << " m_root_stale=" << m_root_stale << " root_addr="
+      //    << m_root_range_info.addr.to_str() << " scanning metadata at addr "
+      //    << addr.to_str() << " scan_spec=" << meta_scan_spec << HT_END;
+
       m_range_server.create_scanner(addr, m_metadata_table, range,
                                     meta_scan_spec, scan_block, timer);
     }
     catch (Exception &e) {
-      if (e.code() == Error::RANGESERVER_RANGE_NOT_FOUND)
+      if (e.code() == Error::RANGESERVER_RANGE_NOT_FOUND ||
+          e.code() == Error::COMM_NOT_CONNECTED)
         m_root_stale = true;
+      //HT_DEBUG_OUT << "Error trying to locate " << table->id <<  "[" << row_key
+      //    << "]" << " hard=" << hard << " m_root_stale=" << m_root_stale << " root_addr="
+      //    << m_root_range_info.addr.to_str() << " scanning metadata at addr "
+      //    << addr.to_str() << " - "<< e << HT_END;
+
       SAVE_ERR2(e.code(), e, format("Problem creating scanner for start row "
                 "'%s' on METADATA[..??]", meta_keys.start));
       return e.code();
@@ -415,7 +430,7 @@ RangeLocator::find(const TableIdentifier *table, const char *row_key,
                                   meta_scan_spec, scan_block, timer);
   }
   catch (Exception &e) {
-    if (e.code() == Error::RANGESERVER_RANGE_NOT_FOUND)
+    if (e.code() == Error::RANGESERVER_RANGE_NOT_FOUND || e.code() == Error::COMM_NOT_CONNECTED)
       m_cache->invalidate(TableIdentifier::METADATA_ID,
                           meta_keys.start+TableIdentifier::METADATA_ID_LENGTH+1);
     SAVE_ERR2(e.code(), e, format("Problem creating scanner on second-level "
@@ -483,7 +498,15 @@ int RangeLocator::process_metadata_scanblock(ScanBlock &scan_block, Timer &timer
       return Error::INVALID_METADATA;
     }
     stripped_key++;
-
+    {
+      const uint8_t *str;
+      size_t len = value.decode_length(&str);
+      //cout << "TS=" << key.timestamp << endl;
+      String tmp_str = String((const char *)str, len);
+      //HT_DEBUG_OUT << "Got key=" << key << ", stripped_key "
+      //    << stripped_key << ", value=" << tmp_str << " got start_row=" << got_start_row
+      //    << ", got_end_row=" << got_end_row << ", got_location=" << got_location << HT_END;
+    }
     if (got_end_row) {
       if (strcmp(stripped_key, range_loc_info.end_row.c_str())) {
         if (got_start_row && got_location) {
@@ -493,20 +516,31 @@ int RangeLocator::process_metadata_scanblock(ScanBlock &scan_block, Timer &timer
            */
           if (m_conn_manager) {
             m_conn_manager->add(range_loc_info.addr, METADATA_RETRY_INTERVAL, "RangeServer");
+            //HT_DEBUG_OUT << "Trying to connect to " << range_loc_info.addr.to_str()
+            //    << " for range [" << range_loc_info.start_row << ".." << range_loc_info.end_row
+            //    << "]" << HT_END;
 	    if (!m_conn_manager->wait_for_connection(range_loc_info.addr, timer.remaining())) {
-	      if (timer.expired())
-		HT_THROW_(Error::REQUEST_TIMEOUT);
+        if (timer.expired()) {
+          //HT_DEBUG_OUT << "Error trying to connect to " << range_loc_info.addr.to_str()
+          //      << " for range [" << range_loc_info.start_row << ".." << range_loc_info.end_row
+          //      << "], request timed out" << HT_END;
+          HT_THROW_(Error::REQUEST_TIMEOUT);
+        }
 	    }
 	  }
 
           m_cache->insert(table_name.c_str(), range_loc_info);
-          /*
-          HT_DEBUG_OUT << "(1) cache insert table=" << table_name << " start="
-              << range_loc_info.start_row << " end=" << range_loc_info.end_row
-              << " loc=" << range_loc_info.addr.to_str() << HT_END;
-          */
+
+          //HT_DEBUG_OUT << "(1) cache insert table=" << table_name << " start="
+          //    << range_loc_info.start_row << " end=" << range_loc_info.end_row
+          //    << " loc=" << range_loc_info.addr.to_str() << HT_END;
+
         }
         else {
+          //HT_DEBUG_OUT << "Incomplete METADATA record found =" << table_name << " end="
+          //    << range_loc_info.end_row << " got start_row=" << got_start_row
+          //    << ", got_end_row=" << got_end_row << ", got_location=" << got_location << HT_END;
+
           SAVE_ERR(Error::INVALID_METADATA, format("Incomplete METADATA record "
                    "found under row key '%s' (got_location=%s)", range_loc_info
                    .end_row.c_str(), got_location ? "true" : "false"));
@@ -556,21 +590,32 @@ int RangeLocator::process_metadata_scanblock(ScanBlock &scan_block, Timer &timer
      */
     if (m_conn_manager) {
       m_conn_manager->add(range_loc_info.addr, METADATA_RETRY_INTERVAL, "RangeServer");
+      //HT_DEBUG_OUT << "Trying to connect to " << range_loc_info.addr.to_str()
+      //    << " for range [" << range_loc_info.start_row << ".." << range_loc_info.end_row
+      //    << "]" << HT_END;
       if (!m_conn_manager->wait_for_connection(range_loc_info.addr, timer.remaining())) {
-	if (timer.expired())
-	  HT_THROW_(Error::REQUEST_TIMEOUT);
+        if (timer.expired()) {
+          //HT_INFO_OUT << "Error trying to connect to " << range_loc_info.addr.to_str()
+          //      << " for range [" << range_loc_info.start_row << ".."
+          //      << range_loc_info.end_row << "], request timed out" << HT_END;
+          HT_THROW_(Error::REQUEST_TIMEOUT);
+        }
       }
     }
 
     m_cache->insert(table_name.c_str(), range_loc_info);
 
-    /*
-    HT_DEBUG_OUT << "(2) cache insert table=" << table_name << " start="
-        << range_loc_info.start_row << " end=" << range_loc_info.end_row
-        << " loc=" << range_loc_info.addr.to_str() << HT_END;
-    */
+
+    //HT_DEBUG_OUT << "(2) cache insert table=" << table_name << " start="
+    //    << range_loc_info.start_row << " end=" << range_loc_info.end_row
+    //    << " loc=" << range_loc_info.addr.to_str() << HT_END;
+
   }
   else if (got_end_row) {
+    //HT_DEBUG_OUT << "Incomplete METADATA record found =" << table_name << " end="
+    //    << range_loc_info.end_row << " got start_row=" << got_start_row
+    //    << ", got_end_row=" << got_end_row << ", got_location=" << got_location << HT_END;
+
     SAVE_ERR(Error::INVALID_METADATA, format("Incomplete METADATA record found "
              "under row key '%s' (got_location=%s)", range_loc_info
              .end_row.c_str(), got_location ? "true" : "false"));

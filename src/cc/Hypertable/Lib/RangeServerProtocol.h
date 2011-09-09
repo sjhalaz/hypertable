@@ -29,6 +29,7 @@
 #include "RangeState.h"
 #include "ScanSpec.h"
 #include "Types.h"
+#include "RangeServerRecoveryPlan.h"
 
 namespace Hypertable {
 
@@ -36,31 +37,36 @@ namespace Hypertable {
   class RangeServerProtocol : public Protocol {
 
   public:
-    static const uint64_t COMMAND_LOAD_RANGE           = 0;
-    static const uint64_t COMMAND_UPDATE               = 1;
-    static const uint64_t COMMAND_CREATE_SCANNER       = 2;
-    static const uint64_t COMMAND_FETCH_SCANBLOCK      = 3;
-    static const uint64_t COMMAND_COMPACT              = 4;
-    static const uint64_t COMMAND_STATUS               = 5;
-    static const uint64_t COMMAND_SHUTDOWN             = 6;
-    static const uint64_t COMMAND_DUMP                 = 7;
-    static const uint64_t COMMAND_DESTROY_SCANNER      = 8;
-    static const uint64_t COMMAND_DROP_TABLE           = 9;
-    static const uint64_t COMMAND_DROP_RANGE           = 10;
-    static const uint64_t COMMAND_REPLAY_BEGIN         = 11;
-    static const uint64_t COMMAND_REPLAY_LOAD_RANGE    = 12;
-    static const uint64_t COMMAND_REPLAY_UPDATE        = 13;
-    static const uint64_t COMMAND_REPLAY_COMMIT        = 14;
-    static const uint64_t COMMAND_GET_STATISTICS       = 15;
-    static const uint64_t COMMAND_UPDATE_SCHEMA        = 16;
-    static const uint64_t COMMAND_COMMIT_LOG_SYNC      = 17;
-    static const uint64_t COMMAND_CLOSE                = 18;
-    static const uint64_t COMMAND_WAIT_FOR_MAINTENANCE = 19;
-    static const uint64_t COMMAND_ACKNOWLEDGE_LOAD     = 20;
-    static const uint64_t COMMAND_RELINQUISH_RANGE     = 21;
-    static const uint64_t COMMAND_HEAPCHECK            = 22;
-    static const uint64_t COMMAND_METADATA_SYNC        = 23;
-    static const uint64_t COMMAND_MAX                  = 24;
+    static const uint64_t COMMAND_LOAD_RANGE               = 0;
+    static const uint64_t COMMAND_UPDATE                   = 1;
+    static const uint64_t COMMAND_CREATE_SCANNER           = 2;
+    static const uint64_t COMMAND_FETCH_SCANBLOCK          = 3;
+    static const uint64_t COMMAND_COMPACT                  = 4;
+    static const uint64_t COMMAND_STATUS                   = 5;
+    static const uint64_t COMMAND_SHUTDOWN                 = 6;
+    static const uint64_t COMMAND_DUMP                     = 7;
+    static const uint64_t COMMAND_DESTROY_SCANNER          = 8;
+    static const uint64_t COMMAND_DROP_TABLE               = 9;
+    static const uint64_t COMMAND_DROP_RANGE               = 10;
+    static const uint64_t COMMAND_REPLAY_BEGIN             = 11;
+    static const uint64_t COMMAND_REPLAY_LOAD_RANGE        = 12;
+    static const uint64_t COMMAND_REPLAY_UPDATE            = 13;
+    static const uint64_t COMMAND_REPLAY_COMMIT            = 14;
+    static const uint64_t COMMAND_GET_STATISTICS           = 15;
+    static const uint64_t COMMAND_UPDATE_SCHEMA            = 16;
+    static const uint64_t COMMAND_COMMIT_LOG_SYNC          = 17;
+    static const uint64_t COMMAND_CLOSE                    = 18;
+    static const uint64_t COMMAND_WAIT_FOR_MAINTENANCE     = 19;
+    static const uint64_t COMMAND_ACKNOWLEDGE_LOAD         = 20;
+    static const uint64_t COMMAND_RELINQUISH_RANGE         = 21;
+    static const uint64_t COMMAND_HEAPCHECK                = 22;
+    static const uint64_t COMMAND_METADATA_SYNC            = 23;
+    static const uint64_t COMMAND_REPLAY_FRAGMENTS         = 24;
+    static const uint64_t COMMAND_PHANTOM_RECEIVE          = 25;
+    static const uint64_t COMMAND_PHANTOM_UPDATE           = 26;
+    static const uint64_t COMMAND_PHANTOM_PREPARE_RANGES   = 27;
+    static const uint64_t COMMAND_PHANTOM_COMMIT_RANGES    = 28;
+    static const uint64_t COMMAND_MAX                      = 29;
 
     static const char *m_command_strings[];
 
@@ -78,7 +84,7 @@ namespace Hypertable {
       UPDATE_FLAG_IGNORE_UNKNOWN_CFS = 0x0002
     };
 
-    // Flags for 
+    // Flags for
     enum {
       COMPACT_FLAG_ROOT     = 0x0001,
       COMPACT_FLAG_METADATA = 0x0002,
@@ -254,12 +260,10 @@ namespace Hypertable {
 
     /** Creates a "acknowledge load" request message.
      *
-     * @param table table identifier
-     * @param range range specification
+     * @param ranges range specification vector
      * @return protocol message
      */
-    static CommBuf *create_request_acknowledge_load(const TableIdentifier &table,
-                                                    const RangeSpec &range);
+    static CommBuf *create_request_acknowledge_load(const vector<QualifiedRangeSpec*> &ranges);
 
     /** Creates a "get statistics" request message.
      *
@@ -283,11 +287,67 @@ namespace Hypertable {
      */
     static CommBuf *create_request_heapcheck(const String &outfile);
 
+    /** Creates a "replay_fragments" request message.
+     *
+     * @param op_id id of the calling recovery operation
+     * @param attempt id of the replay attempt -- needed in case of master failure
+     * @param location location of the server being recovered
+     * @param type type of ranges being recovered
+     * @param fragments fragments being requested for replay
+     * @param receiver_plan recovery load plan
+     * @param replay_timeout timeout for replay to finish
+     */
+    static CommBuf *create_request_replay_fragments(int64_t op_id, uint32_t attempt,
+        const String &location, int type, const std::vector<uint32_t> &fragments,
+        const RangeServerRecoveryReceiverPlan &receiver_plan, uint32_t replay_timeout);
 
+    /** Creates a "phantom_receive" request message.
+     *
+     * @param location location of server being recovered
+     * @param fragments fragments being replayed
+     * @param ranges range specs to be loaded
+     */
+    static CommBuf *create_request_phantom_receive(const String &location,
+        const vector<uint32_t> &fragments,
+        const std::vector<QualifiedRangeStateSpec> &ranges);
+
+    /** Creates a "phantom_update" request message.
+     *
+     * @param location server being recovered
+     * @param range range being updated
+     * @param fragment fragment updates belong to
+     * @param more if false then this fragment is complete
+     * @param buffer update buffer
+     */
+    static CommBuf *create_request_phantom_update(const QualifiedRangeSpec &range,
+        const String &location, uint32_t fragment, bool more, StaticBuffer &buffer);
+
+    /** Creates a "phantom_prepare_ranges" request message.
+     *
+     * @param op_id id of the calling recovery operation
+     * @param attempt id of the replay attempt -- needed in case of master failure
+     * @param location location of the server being recovered
+     * @param ranges ranges to be prepared
+     * @param timeout_ms timeout
+     */
+    static CommBuf *create_request_phantom_prepare_ranges(int64_t op_id, uint32_t attempt,
+        const String &location, const std::vector<QualifiedRangeSpec> &ranges,
+        uint32_t timeout_ms);
+
+    /** Creates a "phantom_commit_ranges" request message.
+     *
+     * @param op_id id of the calling recovery operation
+     * @param attempt id of the replay attempt -- needed in case of master failure
+     * @param location location of the server being recovered
+     * @param ranges ranges to be commit
+     * @param timeout_ms timeout
+     */
+    static CommBuf *create_request_phantom_commit_ranges(int64_t op_id, uint32_t attempt,
+        const String &location, const std::vector<QualifiedRangeSpec> &ranges,
+        uint32_t timeout_ms);
 
     virtual const char *command_text(uint64_t command);
   };
-
 }
 
 #endif // HYPERTABLE_RANGESERVERPROTOCOL_H

@@ -24,6 +24,7 @@
 
 #include <stack>
 #include <vector>
+#include <set>
 
 #include <boost/thread/mutex.hpp>
 
@@ -41,11 +42,16 @@
 
 namespace Hypertable {
 
+  using namespace std;
   class CommitLogReader : public CommitLogBase {
 
   public:
     CommitLogReader(FilesystemPtr &fs, const String &log_dir, bool mark_for_deletion=false);
+    CommitLogReader(FilesystemPtr &fs, const String &log_dir,
+        const vector<uint32_t> &fragment_filter);
     virtual ~CommitLogReader();
+
+    void get_init_fragment_ids(vector<uint32_t> &ids);
 
     bool next_raw_block(CommitLogBlockInfo *,
                         BlockCompressionHeaderCommitLog *);
@@ -59,10 +65,15 @@ namespace Hypertable {
       m_latest_revision = TIMESTAMP_MIN;
     }
 
+    uint32_t get_current_fragment_id() const {
+      return m_current_fragment_id;
+    }
+
   private:
 
     void load_fragments(String log_dir, bool mark_for_deletion);
     void load_compressor(uint16_t ztype);
+    void populate_init_fragments();
 
     FilesystemPtr     m_fs;
     uint64_t          m_fragment_queue_offset;
@@ -74,7 +85,9 @@ namespace Hypertable {
     CompressorMap          m_compressor_map;
     uint16_t               m_compressor_type;
     BlockCompressionCodec *m_compressor;
-
+    set<uint64_t>          m_fragment_filter;
+    uint32_t               m_current_fragment_id;
+    vector<uint32_t>       m_init_fragments;
   };
 
   typedef intrusive_ptr<CommitLogReader> CommitLogReaderPtr;

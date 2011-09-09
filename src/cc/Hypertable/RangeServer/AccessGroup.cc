@@ -134,8 +134,9 @@ void AccessGroup::update_schema(SchemaPtr &schema,
  * CellCache should be locked as well.
  */
 void AccessGroup::add(const Key &key, const ByteString value) {
-  if (!m_cell_cache)
+  if (!m_cell_cache) {
     m_cell_cache = new CellCache();
+  }
   if (key.revision > m_latest_stored_revision || Global::ignore_clock_skew_errors) {
     if (key.revision < m_earliest_cached_revision)
       m_earliest_cached_revision = key.revision;
@@ -146,6 +147,10 @@ void AccessGroup::add(const Key &key, const ByteString value) {
   }
   else if (!m_recovering) {
     HT_ERROR("Revision (clock) skew detected! May result in data loss.");
+    //HT_DEBUG_OUT << "skew detected for key=" << key.row
+    //    << " key.revision=" << key.revision << " latest_stored_revision="
+    //    << m_latest_stored_revision << " earliest_cached_revision="
+    //    << m_earliest_cached_revision << HT_END;
     if (m_schema->column_is_counter(key.column_family_code))
       return m_cell_cache->add_counter(key, value);
     else
@@ -649,8 +654,9 @@ void AccessGroup::run_compaction(int maintenance_flags) {
       else if (major || gc) {
         mscanner = new MergeScannerAccessGroup(scan_context);
         scanner = mscanner;
-        if (m_immutable_cache)
+        if (m_immutable_cache) {
           mscanner->add_scanner(m_immutable_cache->create_scanner(scan_context));
+        }
         for (size_t i=0; i<m_stores.size(); i++) {
           HT_ASSERT(m_stores[i].cs);
           mscanner->add_scanner(m_stores[i].cs->create_scanner(scan_context));
@@ -723,9 +729,12 @@ void AccessGroup::run_compaction(int maintenance_flags) {
 
         m_latest_stored_revision = boost::any_cast<int64_t>
           (cellstore->get_trailer()->get("revision"));
-        if (m_latest_stored_revision >= m_earliest_cached_revision)
+        if (m_latest_stored_revision >= m_earliest_cached_revision) {
           HT_ERROR("Revision (clock) skew detected! May result in data loss.");
-
+          HT_DEBUG_OUT << "Revision (clock) skew detected! May result in data"
+              << " loss in AG for range " << m_range_name
+              << " " << std::hex << this << HT_END;
+        }
         if (m_in_memory) {
           m_immutable_cache = filtered_cache;
           merge_caches(false);
@@ -833,7 +842,6 @@ void AccessGroup::shrink(String &split_row, bool drop_high) {
 
     new_cell_cache = new CellCache();
     new_cell_cache->lock();
-
     m_cell_cache = new_cell_cache;
 
     if (old_cell_cache) {
@@ -920,6 +928,7 @@ void AccessGroup::stage_compaction() {
   m_immutable_cache->freeze();
   m_garbage_tracker.add_delete_count( m_immutable_cache->get_delete_count() );
   m_garbage_tracker.accumulate_data( m_immutable_cache->memory_used() );
+
   m_cell_cache = 0;
   m_earliest_cached_revision_saved = m_earliest_cached_revision;
   m_earliest_cached_revision = TIMESTAMP_MAX;

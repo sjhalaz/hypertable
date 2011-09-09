@@ -41,13 +41,13 @@ bool TableInfo::remove(const String &start_row, const String &end_row) {
   RangeInfoSet::iterator iter = m_range_set.find(range_info);
 
   if (iter == m_range_set.end() || !iter->get_range()) {
-    HT_INFOF("Unable to remove %s[%s..%s] from TableInfo because non-existant",
-             m_identifier.id, start_row.c_str(), end_row.c_str());
+    HT_INFOF("%p: Unable to remove %s[%s..%s] from TableInfo because non-existant",
+             (void *) this, m_identifier.id, start_row.c_str(), end_row.c_str());
     return false;
   }
 
-  HT_INFOF("Removing %s[%s..%s] from TableInfo",
-           m_identifier.id, start_row.c_str(), end_row.c_str());
+  HT_INFOF("%p: Removing %s[%s..%s] from TableInfo",
+           (void *) this, m_identifier.id, start_row.c_str(), end_row.c_str());
 
   m_range_set.erase(iter);
 
@@ -65,6 +65,11 @@ TableInfo::change_end_row(const String &start_row, const String &old_end_row,
   if (iter == m_range_set.end() || iter->get_range() == 0) {
     HT_ERRORF("%p: Problem changing old end row '%s' to '%s' (start row '%s')", (void *)this,
               old_end_row.c_str(), new_end_row.c_str(), start_row.c_str());
+    //if (iter != m_range_set.end())
+    //  HT_DEBUGF("%p: RangeInfo found but range ptr is null while changing old end row '%s' to '%s' (start row '%s')", (void *)this, old_end_row.c_str(), new_end_row.c_str(), start_row.c_str());
+    //else
+    //  HT_DEBUGF("%p: RangeInfo NOT found while changing old end row '%s' to '%s' (start row '%s')", (void *)this, old_end_row.c_str(), new_end_row.c_str(), start_row.c_str());
+
     for (m_range_set.begin(); iter != m_range_set.end(); ++iter) {
       if (iter->get_range())
         HT_INFOF("%p: [%s..%s] -> %s[%s..%s]", (void *)this,
@@ -186,15 +191,15 @@ bool TableInfo::remove_range(const RangeSpec *range_spec, RangePtr &range) {
   RangeInfoSet::iterator iter = m_range_set.find(range_info);
 
   if (iter == m_range_set.end() || !iter->get_range()) {
-    HT_INFOF("Problem removing range %s[%s..%s] from TableInfo, range not found",
-             m_identifier.id, range_spec->start_row, range_spec->end_row);
+    HT_INFOF("%p: Problem removing range %s[%s..%s] from TableInfo, range not found",
+             (void *) this, m_identifier.id, range_spec->start_row, range_spec->end_row);
     return false;
   }
 
   range = iter->get_range();
 
-  HT_INFOF("Removing range %s[%s..%s] from TableInfo",
-           m_identifier.id, range_spec->start_row, range_spec->end_row);
+  HT_INFOF("%p: Removing range %s[%s..%s] from TableInfo",
+           (void *)this, m_identifier.id, range_spec->start_row, range_spec->end_row);
 
   m_range_set.erase(iter);
 
@@ -207,8 +212,8 @@ void TableInfo::stage_range(const RangeSpec *range_spec) {
   RangeInfo range_info(range_spec->start_row, range_spec->end_row);
   RangeInfoSet::iterator iter = m_range_set.find(range_info);
   HT_ASSERT(iter == m_range_set.end());
-  HT_INFOF("Staging range %s[%s..%s] to TableInfo",
-           m_identifier.id, range_spec->start_row,
+  HT_INFOF("%p: Staging range %s[%s..%s] to TableInfo",
+           (void *) this, m_identifier.id, range_spec->start_row,
            range_spec->end_row);
   RangeInfoSetInsRec ins = m_range_set.insert(range_info);
   HT_ASSERT(ins.second);
@@ -221,8 +226,8 @@ void TableInfo::unstage_range(const RangeSpec *range_spec) {
 
   HT_ASSERT(iter != m_range_set.end());
   HT_ASSERT(!iter->get_range());
-  HT_INFOF("Unstaging range %s[%s..%s] to TableInfo",
-           m_identifier.id, range_spec->start_row,
+  HT_INFOF("%p: Unstaging range %s[%s..%s] to TableInfo",
+           (void *)this, m_identifier.id, range_spec->start_row,
            range_spec->end_row);
   m_range_set.erase(iter);
 }
@@ -235,8 +240,8 @@ void TableInfo::add_staged_range(RangePtr &range) {
 
   HT_ASSERT(iter != m_range_set.end());
   HT_ASSERT(!iter->get_range());
-  HT_INFOF("Adding range %s[%s..%s] to TableInfo",
-           range->get_name().c_str(),
+  HT_INFOF("%p: Adding range %s[%s..%s] to TableInfo",
+           (void *)this, range->get_name().c_str(),
            iter->get_start_row().c_str(),
            iter->get_end_row().c_str());
   range_info.set_range(range);
@@ -253,10 +258,8 @@ void TableInfo::add_range(RangePtr &range) {
   RangeInfoSet::iterator iter = m_range_set.find(range_info);
 
   HT_ASSERT(iter == m_range_set.end());
-  HT_INFOF("Adding range %s[%s..%s] to TableInfo",
-           range->get_name().c_str(),
-           range_info.get_start_row().c_str(),
-           range_info.get_end_row().c_str());
+  HT_INFOF("%p: Adding range %s to TableInfo",
+           (void *)this, range->get_name().c_str());
   RangeInfoSetInsRec ins = m_range_set.insert(range_info);
   HT_ASSERT(ins.second);
 }
@@ -358,8 +361,8 @@ int32_t TableInfo::get_range_count() {
 
 void TableInfo::clear() {
   ScopedLock lock(m_mutex);
-  HT_INFOF("Clearing set for table %s",
-           m_identifier.id);
+  HT_INFOF("%p: Clearing set for table %s",
+           (void *) this, m_identifier.id);
   m_range_set.clear();
 }
 

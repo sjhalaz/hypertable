@@ -181,7 +181,14 @@ void OperationMoveRange::execute() {
         HT_WARNF("Skipping %s::acknowledge_load() because in TEST MODE", m_location.c_str());
       else {
         try {
-          rsc.acknowledge_load(addr, *table, *range);
+          QualifiedRangeSpec qrs(*table, *range);
+          vector<QualifiedRangeSpec *> range_vec;
+          map<QualifiedRangeSpec, int> response_map;
+          range_vec.push_back(&qrs);
+          rsc.acknowledge_load(addr, range_vec, response_map);
+          map<QualifiedRangeSpec, int>::iterator it = response_map.begin();
+          if (it->second != Error::OK)
+            HT_THROW(it->second, "Problem acknowledging load range");
         }
         catch (Exception &e) {
           if (e.code() != Error::RANGESERVER_TABLE_DROPPED &&

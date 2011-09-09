@@ -43,6 +43,7 @@ OperationInitialize.cc
 OperationMoveRange.cc
 OperationProcessor.cc
 OperationRecoverServer.cc
+OperationRecoverServerRanges.cc
 OperationRegisterServer.cc
 OperationRelinquishAcknowledge.cc
 OperationRenameTable.cc

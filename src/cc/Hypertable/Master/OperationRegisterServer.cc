@@ -74,8 +74,26 @@ void OperationRegisterServer::execute() {
     if (!m_context->in_operation)
       balanced = true;
     m_rsc = new RangeServerConnection(m_context->mml_writer, m_location,
-                                      m_system_stats.net_info.host_name, m_public_addr,
-                                      balanced);
+        m_system_stats.net_info.host_name, m_public_addr,
+        balanced);
+  }
+
+  // this connection has been marked for removal
+  if (m_rsc->get_removed()) {
+    m_error = Error::MASTER_RANGESERVER_IN_RECOVERY;
+    m_error_msg = format("Detected RangeServer marked removed while registering server %s(%s), as location %s",
+        m_system_stats.net_info.host_name.c_str(), m_public_addr.format().c_str(),
+        m_location.c_str());
+    HT_ERROR_OUT << m_error_msg << HT_END;
+    CommHeader header;
+    header.initialize_from_request_header(m_event->header);
+    CommBufPtr cbp(new CommBuf(header, encoded_result_length()));
+
+    encode_result(cbp->get_data_ptr_address());
+    int error = m_context->comm->send_response(m_event->addr, cbp);
+    if (error != Error::OK)
+      HT_ERRORF("Problem sending response (location=%s) back to %s",
+                m_location.c_str(), m_event->addr.format().c_str());
   }
 
   m_context->connect_server(m_rsc, m_system_stats.net_info.host_name,

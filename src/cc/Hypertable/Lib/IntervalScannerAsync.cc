@@ -232,7 +232,8 @@ void IntervalScannerAsync::find_range_and_start_scan(const char *row_key, bool h
       HT_THROW2(e.code(), e, e.what());
     poll(0, 0, 1000);
     if (m_create_timer.expired())
-      HT_THROW(Error::REQUEST_TIMEOUT, "");
+      HT_THROW(Error::REQUEST_TIMEOUT, e.what());
+    hard=true;
     goto try_again;
   }
 
@@ -246,9 +247,10 @@ void IntervalScannerAsync::find_range_and_start_scan(const char *row_key, bool h
           m_scan_spec_builder.get(), &m_create_handler, m_create_timer);
     }
     catch (Exception &e) {
-      String msg = format("Problem creating scanner on %s[%s..%s]",
-                          m_table_identifier.id, range.start_row,
-                          range.end_row);
+      String msg = format("Problem creating scanner  at %s on %s[%s..%s] - %s",
+                          m_next_range_info.addr.to_str().c_str(), m_table_identifier.id,
+                          range.start_row,
+                          range.end_row, e.what());
       reset_outstanding_status(true, false);
       if ((e.code() != Error::REQUEST_TIMEOUT
            && e.code() != Error::COMM_NOT_CONNECTED

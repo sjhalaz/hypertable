@@ -158,8 +158,14 @@ void RangeServerCommandInterpreter::execute_line(const String &line) {
       range_state.soft_limit = 200000000LL;
 
       m_range_server->load_range(m_addr, *table, range, 0, range_state, false);
-
-      m_range_server->acknowledge_load(m_addr, *table, range);
+      QualifiedRangeSpec qrs(*table, range);
+      vector<QualifiedRangeSpec *> qrs_vec;
+      qrs_vec.push_back(&qrs);
+      map<QualifiedRangeSpec, int> response_map;
+      m_range_server->acknowledge_load(m_addr, qrs_vec, response_map);
+      map<QualifiedRangeSpec, int>::iterator it = response_map.begin();
+      if (it->second != Error::OK)
+        HT_THROW(it->second, "Problem acknowledging load range");
 
     }
     else if (state.command == COMMAND_UPDATE) {

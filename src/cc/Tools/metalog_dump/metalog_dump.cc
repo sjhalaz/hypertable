@@ -42,9 +42,9 @@
 
 #include "Hypertable/Lib/MetaLog.h"
 #include "Hypertable/Lib/MetaLogReader.h"
+#include "Hypertable/Lib/MetaLogEntityRange.h"
+#include "Hypertable/Lib/MetaLogDefinitionRangeServer.h"
 
-#include "Hypertable/RangeServer/MetaLogEntityRange.h"
-#include "Hypertable/RangeServer/MetaLogDefinitionRangeServer.h"
 #include "Hypertable/Master/MetaLogDefinitionMaster.h"
 
 using namespace Hypertable;

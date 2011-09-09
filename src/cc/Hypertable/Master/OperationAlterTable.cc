@@ -48,7 +48,7 @@ OperationAlterTable::OperationAlterTable(ContextPtr &context,
   : Operation(context, header_) {
 }
 
-OperationAlterTable::OperationAlterTable(ContextPtr &context, EventPtr &event) 
+OperationAlterTable::OperationAlterTable(ContextPtr &context, EventPtr &event)
   : Operation(context, event, MetaLog::EntityType::OPERATION_ALTER_TABLE) {
   const uint8_t *ptr = event->payload;
   size_t remaining = event->payload_len;
@@ -63,6 +63,7 @@ void OperationAlterTable::initialize_dependencies() {
   add_dependency(Dependency::INIT);
   add_dependency(Dependency::METADATA);
   add_dependency(Dependency::SYSTEM);
+  add_dependency(Dependency::RECOVER_SERVER);
 }
 
 void OperationAlterTable::execute() {

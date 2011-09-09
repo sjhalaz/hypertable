@@ -56,13 +56,15 @@ namespace Hypertable {
   public:
     CommitLogBase(const String &log_dir)
       : m_log_dir(log_dir), m_latest_revision(TIMESTAMP_MIN) {
-      size_t lastslash = log_dir.find_last_of('/');
+      if (m_log_dir.find_last_of('/') != m_log_dir.length()-1)
+        m_log_dir.push_back('/');
 
-      if (lastslash == log_dir.length()-1)
-        lastslash = log_dir.find_last_of('/', log_dir.length()-2);
+      size_t lastslash;
 
-      m_log_name = (lastslash == String::npos) ? log_dir
-                                               : log_dir.substr(lastslash+1);
+      lastslash = m_log_dir.find_last_of('/', m_log_dir.length()-2);
+
+      m_log_name = (lastslash == String::npos) ? m_log_dir
+                                               : m_log_dir.substr(lastslash+1);
     }
 
     void stitch_in(CommitLogBase *other) {

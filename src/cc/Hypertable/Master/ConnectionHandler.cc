@@ -149,7 +149,18 @@ void ConnectionHandler::handle(EventPtr &event) {
       case MasterProtocol::COMMAND_FETCH_RESULT:
         m_context->response_manager->add_delivery_info(event);
         return;
-
+      case MasterProtocol::COMMAND_REPLAY_COMPLETE:
+        m_context->replay_complete(event);
+        send_ok_response(event);
+        return;
+      case MasterProtocol::COMMAND_PHANTOM_PREPARE_COMPLETE:
+        m_context->prepare_complete(event);
+        send_ok_response(event);
+        return;
+      case MasterProtocol::COMMAND_PHANTOM_COMMIT_COMPLETE:
+        m_context->commit_complete(event);
+        send_ok_response(event);
+        return;
       default:
         HT_THROWF(PROTOCOL_ERROR, "Unimplemented command (%llu)",
                   (Llu)event->header.command);
@@ -239,6 +250,17 @@ int32_t ConnectionHandler::send_id_response(EventPtr &event, OperationPtr &opera
   return error;
 }
 
+int32_t ConnectionHandler::send_ok_response(EventPtr &event) {
+  CommHeader header;
+  header.initialize_from_request_header(event->header);
+  CommBufPtr cbp(new CommBuf(header, 4));
+  cbp->append_i32(Error::OK);
+  int ret = m_context->comm->send_response(event->addr, cbp);
+  if (ret != Error::OK)
+    HT_ERRORF("Problem sending error response back to %s - %s",
+              event->addr.format().c_str(), Error::get_text(ret));
+  return ret;
+}
 
 int32_t ConnectionHandler::send_error_response(EventPtr &event, int32_t error, const String &msg) {
   CommHeader header;

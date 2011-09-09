@@ -31,6 +31,8 @@
 #include "OperationInitialize.h"
 #include "OperationMoveRange.h"
 #include "OperationRenameTable.h"
+#include "OperationRecoverServer.h"
+#include "OperationRecoverServerRanges.h"
 #include "RangeServerConnection.h"
 
 using namespace Hypertable;
@@ -72,6 +74,10 @@ Entity *DefinitionMaster::create(uint16_t log_version, const EntityHeader &heade
     return new OperationMoveRange(m_context, header);
   else if (header.type == EntityType::OPERATION_BALANCE)
     return new OperationBalance(m_context, header);
+  else if (header.type == EntityType::OPERATION_RECOVER_SERVER)
+    return new OperationRecoverServer(m_context, header);
+  else if (header.type == EntityType::OPERATION_RECOVER_SERVER_RANGES)
+    return new OperationRecoverServerRanges(m_context, header);
 
   HT_THROWF(Error::METALOG_ENTRY_BAD_TYPE,
             "Unrecognized type (%d) encountered in mml",

@@ -54,6 +54,11 @@ namespace Hypertable {
     "relinquish range",
     "heapcheck",
     "metadata sync",
+    "replay fragments",
+    "phantom receive",
+    "phantom update",
+    "phantom prepare ranges",
+    "phantom commit ranges",
     (const char *)0
   };
 
@@ -298,14 +303,20 @@ namespace Hypertable {
   }
 
   CommBuf *
-  RangeServerProtocol::create_request_acknowledge_load(const TableIdentifier &table,
-                                                       const RangeSpec &range) {
+  RangeServerProtocol::create_request_acknowledge_load(const vector<QualifiedRangeSpec*> &ranges) {
     CommHeader header(COMMAND_ACKNOWLEDGE_LOAD);
     header.flags |= CommHeader::FLAGS_BIT_URGENT;
-    CommBuf *cbuf = new CommBuf(header, table.encoded_length()
-                                + range.encoded_length());
-    table.encode(cbuf->get_data_ptr_address());
-    range.encode(cbuf->get_data_ptr_address());
+    size_t len=4;
+    foreach(const QualifiedRangeSpec *range, ranges) {
+      len += range->encoded_length();
+    }
+
+    CommBuf *cbuf = new CommBuf(header, len);
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), ranges.size());
+    foreach(const QualifiedRangeSpec *range, ranges) {
+      range->encode(cbuf->get_data_ptr_address());
+    }
+
     return cbuf;
   }
 
@@ -335,5 +346,121 @@ namespace Hypertable {
     return cbuf;
   }
 
+  CommBuf *RangeServerProtocol::create_request_replay_fragments(int64_t op_id, uint32_t attempt,
+      const String &recover_location, int type, const vector<uint32_t> &fragments,
+      const RangeServerRecoveryReceiverPlan &receiver_plan, uint32_t replay_timeout) {
+    CommHeader header(COMMAND_REPLAY_FRAGMENTS);
+    header.flags |= CommHeader::FLAGS_BIT_URGENT;
+    size_t len = Serialization::encoded_length_vi64(op_id);
+    len += Serialization::encoded_length_vi32(attempt);
+    len +=Serialization::encoded_length_vstr(recover_location.c_str());
+    len += Serialization::encoded_length_vi32(type);
+    len += 4;
+    for(size_t ii=0; ii<fragments.size(); ++ii)
+      len += Serialization::encoded_length_vi32(fragments[ii]);
+    len += receiver_plan.encoded_length();
+    len += 4;
+
+    CommBuf *cbuf = new CommBuf(header, len);
+    Serialization::encode_vi64(cbuf->get_data_ptr_address(), op_id);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), attempt);
+    Serialization::encode_vstr(cbuf->get_data_ptr_address(), recover_location.c_str());
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), type);
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), fragments.size());
+    for(size_t ii=0; ii<fragments.size(); ++ii)
+      Serialization::encode_vi32(cbuf->get_data_ptr_address(), fragments[ii]);
+    receiver_plan.encode(cbuf->get_data_ptr_address());
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), replay_timeout);
+
+    return cbuf;
+  }
+
+  CommBuf *RangeServerProtocol::create_request_phantom_receive(const String &location,
+      const vector<uint32_t> &fragments, const vector<QualifiedRangeStateSpec> &ranges) {
+    CommHeader header(COMMAND_PHANTOM_RECEIVE);
+    header.flags |= CommHeader::FLAGS_BIT_URGENT;
+    size_t len = Serialization::encoded_length_vstr(location.c_str());
+    len += 4;
+    for(size_t ii=0; ii<fragments.size(); ++ii)
+      len += Serialization::encoded_length_vi32(fragments[ii]);
+    len += 4;
+    for(size_t ii=0; ii<ranges.size(); ++ii)
+      len += ranges[ii].encoded_length();
+
+    CommBuf *cbuf = new CommBuf(header, len);
+    Serialization::encode_vstr(cbuf->get_data_ptr_address(), location.c_str());
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), fragments.size());
+    for(size_t ii=0; ii<fragments.size(); ++ii)
+      Serialization::encode_vi32(cbuf->get_data_ptr_address(), fragments[ii]);
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), ranges.size());
+    for(size_t ii=0; ii<ranges.size(); ++ii)
+      ranges[ii].encode(cbuf->get_data_ptr_address());
+
+    return cbuf;
+  }
+
+  CommBuf *RangeServerProtocol::create_request_phantom_update(const QualifiedRangeSpec &range,
+      const String &location, uint32_t fragment, bool more, StaticBuffer &buffer) {
+    CommHeader header(COMMAND_PHANTOM_UPDATE);
+    header.flags |= CommHeader::FLAGS_BIT_URGENT;
+    size_t len = Serialization::encoded_length_vstr(location) + range.encoded_length() +
+                 Serialization::encoded_length_vi32(fragment) + 1;
+    CommBuf *cbuf = new CommBuf(header, len, buffer);
+    Serialization::encode_vstr(cbuf->get_data_ptr_address(), location);
+    range.encode(cbuf->get_data_ptr_address());
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), fragment);
+    Serialization::encode_bool(cbuf->get_data_ptr_address(), more);
+    return cbuf;
+  }
+
+  CommBuf *RangeServerProtocol::create_request_phantom_prepare_ranges(int64_t op_id,
+      uint32_t attempt, const String &location, const vector<QualifiedRangeSpec> &ranges,
+      uint32_t timeout_ms) {
+    CommHeader header(COMMAND_PHANTOM_PREPARE_RANGES);
+    header.flags |= CommHeader::FLAGS_BIT_URGENT;
+    size_t len = Serialization::encoded_length_vi64(op_id);
+    len += Serialization::encoded_length_vi32(attempt);
+    len +=Serialization::encoded_length_vstr(location.c_str());
+    len += 4;
+    for(size_t ii=0; ii<ranges.size(); ++ii)
+      len += ranges[ii].encoded_length();
+    len += 4;
+
+    CommBuf *cbuf = new CommBuf(header, len);
+    Serialization::encode_vi64(cbuf->get_data_ptr_address(), op_id);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), attempt);
+    Serialization::encode_vstr(cbuf->get_data_ptr_address(), location.c_str());
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), ranges.size());
+    for(size_t ii=0; ii<ranges.size(); ++ii)
+      ranges[ii].encode(cbuf->get_data_ptr_address());
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), timeout_ms);
+
+    return cbuf;
+  }
+
+  CommBuf *RangeServerProtocol::create_request_phantom_commit_ranges(int64_t op_id,
+      uint32_t attempt, const String &location, const vector<QualifiedRangeSpec> &ranges,
+      uint32_t timeout_ms) {
+    CommHeader header(COMMAND_PHANTOM_COMMIT_RANGES);
+    header.flags |= CommHeader::FLAGS_BIT_URGENT;
+    size_t len = Serialization::encoded_length_vi64(op_id);
+    len += Serialization::encoded_length_vi32(attempt);
+    len +=Serialization::encoded_length_vstr(location.c_str());
+    len += 4;
+    for(size_t ii=0; ii<ranges.size(); ++ii)
+      len += ranges[ii].encoded_length();
+    len += 4;
+
+    CommBuf *cbuf = new CommBuf(header, len);
+    Serialization::encode_vi64(cbuf->get_data_ptr_address(), op_id);
+    Serialization::encode_vi32(cbuf->get_data_ptr_address(), attempt);
+    Serialization::encode_vstr(cbuf->get_data_ptr_address(), location.c_str());
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), ranges.size());
+    for(size_t ii=0; ii<ranges.size(); ++ii)
+      ranges[ii].encode(cbuf->get_data_ptr_address());
+    Serialization::encode_i32(cbuf->get_data_ptr_address(), timeout_ms);
+
+    return cbuf;
+  }
 
 } // namespace Hypertable

@@ -40,6 +40,7 @@ namespace Hypertable {
 
   namespace RangeServerConnectionFlags {
     enum {
+      INIT     = 0x00,
       BALANCED = 0x01,
       REMOVED  = 0x02
     };
