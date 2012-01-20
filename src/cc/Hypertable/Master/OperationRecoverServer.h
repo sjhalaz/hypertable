@@ -43,12 +43,14 @@ namespace Hypertable {
     virtual void execute();
     virtual const String name();
     virtual const String label();
+    virtual const String location() { return m_location; }
 
     virtual void display_state(std::ostream &os);
     virtual size_t encoded_state_length() const;
     virtual void encode_state(uint8_t **bufp) const;
     virtual void decode_state(const uint8_t **bufp, size_t *remainp);
     virtual void decode_request(const uint8_t **bufp, size_t *remainp);
+    virtual bool exclusive() { return true; }
 
   private:
     enum {

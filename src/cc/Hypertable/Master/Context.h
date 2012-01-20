@@ -122,6 +122,7 @@ namespace Hypertable {
     void set_servers_balanced(const std::vector<RangeServerConnectionPtr> &servers);
     size_t connection_count() { ScopedLock lock(mutex); return conn_count; }
     size_t server_count() { ScopedLock lock(mutex); return m_server_list.size(); }
+    size_t connected_server_count();
     void get_servers(std::vector<RangeServerConnectionPtr> &servers);
     void get_connected_servers(std::vector<RangeServerConnectionPtr> &servers);
     void get_connected_servers(StringSet &locations);

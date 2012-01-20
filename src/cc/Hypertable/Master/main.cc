@@ -145,6 +145,7 @@ int main(int argc, char **argv) {
      */
     std::vector<MetaLog::EntityPtr> entities;
     std::vector<OperationPtr> operations;
+    std::map<String, OperationPtr> recovery_operations;
     MetaLog::ReaderPtr mml_reader;
     OperationPtr operation;
     RangeServerConnectionPtr rsc;
@@ -183,8 +184,15 @@ int main(int argc, char **argv) {
           // there should be only one OPERATION_BALANCE
           HT_ASSERT(context->op_balance == NULL);
           context->op_balance = dynamic_cast<OperationBalance *>(operation.get());
+          operations.push_back(operation);
         }
-        operations.push_back(operation);
+        // master was interrupted in the middle of rangeserver failover
+        else if (dynamic_cast<OperationRecoverServer *>(operation.get())) {
+          OperationRecoverServer *op = dynamic_cast<OperationRecoverServer *>(operation.get());
+          recovery_operations[op->location()] = operation;
+        }
+        else
+          operations.push_back(operation);
       }
       else {
         rsc = dynamic_cast<RangeServerConnection *>(entities[i].get());
@@ -192,9 +200,17 @@ int main(int argc, char **argv) {
         context->add_server(rsc);
         HT_ASSERT(rsc);
         locations.insert(rsc->location());
-        operations.push_back( new OperationRecoverServer(context, rsc) );
+        if (recovery_operations.find(rsc->location()) == recovery_operations.end())
+          recovery_operations[rsc->location()] = new OperationRecoverServer(context, rsc);
       }
     }
+    std::map<String, OperationPtr>::iterator recovery_it = recovery_operations.begin();
+    while(recovery_it != recovery_operations.end()) {
+      operations.push_back(recovery_it->second);
+      ++recovery_it;
+    }
+    recovery_operations.clear();
+
     if (operations.empty()) {
       OperationInitializePtr init_op = new OperationInitialize(context);
       if (context->namemap->exists_mapping("/sys/METADATA", 0))

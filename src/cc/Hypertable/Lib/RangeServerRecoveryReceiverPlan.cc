@@ -75,6 +75,7 @@ void RangeServerRecoveryReceiverPlan::get_ranges(vector<QualifiedRangeStateSpecM
 
   for(; range_it != range_index.end(); ++range_it)
     ranges.push_back(range_it->state_spec);
+  HT_ASSERT(ranges.size());
 }
 
 void RangeServerRecoveryReceiverPlan::get_ranges(const char *location,
@@ -185,8 +186,10 @@ void RangeServerRecoveryReceiverPlan::encode(uint8_t **bufp) const {
 void RangeServerRecoveryReceiverPlan::decode(const uint8_t **bufp, size_t *remainp) {
   size_t num_entries = Serialization::decode_i32(bufp, remainp);
   for(size_t ii=0; ii<num_entries; ++ii) {
-    ReceiverEntry entry;
-    entry.decode(bufp, remainp);
+    ReceiverEntry tmp_entry;
+    tmp_entry.decode(bufp, remainp);
+    ReceiverEntry entry(m_arena, tmp_entry.location, tmp_entry.state_spec.qualified_range.table,
+        tmp_entry.state_spec.qualified_range.range, tmp_entry.state_spec.state);
     m_plan.insert(entry);
   }
 }

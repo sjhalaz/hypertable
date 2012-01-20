@@ -67,5 +67,4 @@ namespace Hypertable {
 
 } // namespace Hypertable
 
-
 #endif // HYPERTABLE_RANGESERVERRECOVERYPLAN_H

@@ -309,6 +309,8 @@ void DefaultPolicy::init_options() {
         "Master wait this long before trying to recover a RangeServer")
     ("Hypertable.Failover.Timeout", i32()->default_value(180000),
         "Timeout for failover operations")
+    ("Hypertable.Failover.Quorum.Percentage", i32()->default_value(90),
+        "Percentage of live RangeServers required for failover to proceed")
     ("Hypertable.RangeServer.AccessGroup.GarbageThreshold.Percentage",
      i32()->default_value(20), "Perform major compaction when garbage accounts "
      "for this percentage of the data")

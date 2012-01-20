@@ -42,6 +42,7 @@ Context::~Context() {
 void Context::add_server(RangeServerConnectionPtr &rsc) {
   ScopedLock lock(mutex);
   pair<Sequence::iterator, bool> insert_result = m_server_list.push_back( RangeServerConnectionEntry(rsc) );
+
   if (!insert_result.second) {
     HT_INFOF("Tried to insert %s host=%s local=%s public=%s", rsc->location().c_str(),
              rsc->hostname().c_str(), rsc->local_addr().format().c_str(),
@@ -301,6 +302,12 @@ bool Context::find_server_by_location(const String &location, RangeServerConnect
   LocationIndex::iterator lookup_iter;
 
   if ((lookup_iter = hash_index.find(location)) == hash_index.end()) {
+    //HT_DEBUG_OUT << "can't find server with location=" << location << HT_END;
+    //for (Sequence::iterator iter = m_server_list.begin(); iter != m_server_list.end(); ++iter) {
+    //  HT_DEBUGF("Contains %s host=%s local=%s public=%s", iter->location().c_str(),
+    //           iter->hostname().c_str(), iter->local_addr().format().c_str(),
+    //           iter->public_addr().format().c_str());
+    //}
     rsc = 0;
     return false;
   }
@@ -417,6 +424,15 @@ void Context::get_servers(std::vector<RangeServerConnectionPtr> &servers) {
   }
 }
 
+size_t Context::connected_server_count() {
+  ScopedLock lock(mutex);
+  size_t count=0;
+  for (ServerList::iterator iter = m_server_list.begin(); iter != m_server_list.end(); ++iter) {
+    if (!iter->removed() && iter->connected())
+      ++count;
+  }
+  return count;
+}
 void Context::get_connected_servers(std::vector<RangeServerConnectionPtr> &servers) {
   ScopedLock lock(mutex);
   for (ServerList::iterator iter = m_server_list.begin(); iter != m_server_list.end(); ++iter) {

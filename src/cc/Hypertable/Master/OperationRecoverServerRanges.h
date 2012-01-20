@@ -52,9 +52,9 @@ namespace Hypertable {
 
   private:
     // make sure all recovery participants are available
-    bool validate_recovery_plan();
+    bool validate_recovery_plan(bool &blocked);
     void initialize_obstructions_dependencies();
-    void get_recovery_plan();
+    void get_recovery_plan(bool &blocked);
     bool replay_commit_log();
     bool prepare_to_commit();
     bool commit();

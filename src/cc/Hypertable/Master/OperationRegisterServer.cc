@@ -138,6 +138,7 @@ void OperationRegisterServer::execute() {
   complete_ok_no_log();
   m_context->op->unblock(m_location);
   m_context->op->unblock(Dependency::SERVERS);
+  m_context->op->unblock(Dependency::RECOVERY_BLOCKER);
   HT_INFOF("%lld Leaving RegisterServer %s", (Lld)header.id, m_rsc->location().c_str());
 }
 

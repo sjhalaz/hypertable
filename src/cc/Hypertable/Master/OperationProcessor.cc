@@ -47,7 +47,7 @@ OperationProcessor::ThreadContext::~ThreadContext() {
 }
 
 
-OperationProcessor::OperationProcessor(ContextPtr &context, size_t thread_count) 
+OperationProcessor::OperationProcessor(ContextPtr &context, size_t thread_count)
   : m_context(context) {
   m_context.execution_order_iter = m_context.execution_order.end();
   m_context.op = this;
@@ -204,7 +204,7 @@ void OperationProcessor::Worker::operator()() {
   Vertex vertex;
   OperationPtr operation;
   bool current_needs_loading = true;
-  
+
   try {
 
     while (true) {
@@ -218,7 +218,7 @@ void OperationProcessor::Worker::operator()() {
             current_needs_loading = true;
           }
           else
-            current_needs_loading = 
+            current_needs_loading =
               m_context.current_active.empty() && m_context.current_blocked == 0;
 
           if (current_needs_loading &&
@@ -531,7 +531,7 @@ void OperationProcessor::Worker::update_operation(Vertex v, OperationPtr &operat
   remove_out_edge_if(v, np, m_context.graph);
 
   m_context.op->add_dependencies(v, operation);
-  
+
   m_context.need_order_recompute = true;
   m_context.current_iter = m_context.current.end();
   m_context.cond.notify_all();

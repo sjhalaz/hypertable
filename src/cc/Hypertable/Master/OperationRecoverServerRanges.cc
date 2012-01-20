@@ -29,6 +29,8 @@
 #include "RSRecoveryReplayCounter.h"
 #include "RSRecoveryCounter.h"
 #include "OperationRecoverServerRanges.h"
+#include "OperationRecoveryBlocker.h"
+#include "OperationProcessor.h"
 
 using namespace Hypertable;
 
@@ -39,11 +41,13 @@ OperationRecoverServerRanges::OperationRecoverServerRanges(ContextPtr &context,
   HT_ASSERT(type != RangeSpec::UNKNOWN);
   set_type_str();
   m_timeout = m_context->props->get_i32("Hypertable.Failover.Timeout");
+  m_dependencies.insert(Dependency::RECOVERY_BLOCKER);
   initialize_obstructions_dependencies();
 }
 
 OperationRecoverServerRanges::OperationRecoverServerRanges(ContextPtr &context,
     const MetaLog::EntityHeader &header_) : Operation(context, header_) {
+  m_dependencies.insert(Dependency::RECOVERY_BLOCKER);
 }
 
 void OperationRecoverServerRanges::execute() {
@@ -55,10 +59,16 @@ void OperationRecoverServerRanges::execute() {
   bool issue_done=false;
   bool prepare_done=false;
   bool commit_done=false;
+  bool blocked = false;
+
+  if (m_timeout == 0)
+    m_timeout = m_context->props->get_i32("Hypertable.Failover.Timeout");
 
   switch (state) {
   case OperationState::INITIAL:
-    get_recovery_plan();
+    get_recovery_plan(blocked);
+    if (blocked)
+      break;
 
     // if there are no fragments or no ranges, there is nothing to do
     if (m_ranges.size()==0) {
@@ -72,7 +82,7 @@ void OperationRecoverServerRanges::execute() {
 
     set_state(OperationState::ISSUE_REQUESTS);
     m_context->mml_writer->record_state(this);
-    HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL", m_type_str.c_str()));
+    HT_MAYBE_FAIL(format("recover-server-ranges-%s-1", m_type_str.c_str()));
     initial_done = true;
 
   case OperationState::ISSUE_REQUESTS:
@@ -82,10 +92,12 @@ void OperationRecoverServerRanges::execute() {
     // if requests succeed, then fall through to WAIT_FOR_COMPLETION state
     // the only information to persist at the end of this stage is if we failed to connect to a player
     // that info will be used in the retries state
-    if (!initial_done && !validate_recovery_plan()) {
+    if (!initial_done && !validate_recovery_plan(blocked)) {
+      if (blocked)
+        break;
       set_state(OperationState::INITIAL);
       m_context->mml_writer->record_state(this);
-      HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL-REDO-a", m_type_str.c_str()));
+      HT_MAYBE_FAIL(format("recover-server-ranges-%s-2", m_type_str.c_str()));
       break;
     }
     try {
@@ -93,7 +105,7 @@ void OperationRecoverServerRanges::execute() {
         // look at failures and modify recovery plan accordingly
         set_state(OperationState::INITIAL);
         m_context->mml_writer->record_state(this);
-        HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL-REDO-b", m_type_str.c_str()));
+        HT_MAYBE_FAIL(format("recover-server-ranges-%s-3", m_type_str.c_str()));
         break;
       }
     }
@@ -103,15 +115,17 @@ void OperationRecoverServerRanges::execute() {
     }
     set_state(OperationState::PREPARE);
     m_context->mml_writer->record_state(this);
-    HT_MAYBE_FAIL(format("recover-server-ranges-%s-ISSUE_REQUESTS", m_type_str.c_str()));
+    HT_MAYBE_FAIL(format("recover-server-ranges-%s-4", m_type_str.c_str()));
     issue_done = true;
     // fall through to prepare
 
   case OperationState::PREPARE:
-    if (!issue_done && !validate_recovery_plan()) {
+    if (!issue_done && !validate_recovery_plan(blocked)) {
+      if (blocked)
+        break;
       set_state(OperationState::INITIAL);
       m_context->mml_writer->record_state(this);
-      HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL-REDO-c", m_type_str.c_str()));
+      HT_MAYBE_FAIL(format("recover-server-ranges-%s-5", m_type_str.c_str()));
       break;
     }
     try {
@@ -121,7 +135,7 @@ void OperationRecoverServerRanges::execute() {
         // look at failures and modify recovery plan accordingly
         set_state(OperationState::INITIAL);
         m_context->mml_writer->record_state(this);
-        HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL-REDO-d", m_type_str.c_str()));
+        HT_MAYBE_FAIL(format("recover-server-ranges-%s-6", m_type_str.c_str()));
         break;
       }
     }
@@ -131,47 +145,51 @@ void OperationRecoverServerRanges::execute() {
     }
     set_state(OperationState::COMMIT);
     m_context->mml_writer->record_state(this);
-    HT_MAYBE_FAIL(format("recover-server-ranges-%s-PREPARE", m_type_str.c_str()));
+    HT_MAYBE_FAIL(format("recover-server-ranges-%s-7", m_type_str.c_str()));
     prepare_done = true;
     // fall through to commit
   case OperationState::COMMIT:
     // tell destination servers to update metadata and flip ranges live
     // persist in rsml and mark range as busy
     // finally tell rangeservers to unmark "busy" ranges
-    if (!prepare_done && !validate_recovery_plan()) {
+    if (!prepare_done && !validate_recovery_plan(blocked)) {
+      if (blocked)
+        break;
       set_state(OperationState::INITIAL);
       m_context->mml_writer->record_state(this);
-      HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL-REDO-e", m_type_str.c_str()));
+      HT_MAYBE_FAIL(format("recover-server-ranges-%s-8", m_type_str.c_str()));
       break;
     }
     if (!commit()) {
       set_state(OperationState::INITIAL);
       m_context->mml_writer->record_state(this);
-      HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL-REDO-f", m_type_str.c_str()));
+      HT_MAYBE_FAIL(format("recover-server-ranges-%s-9", m_type_str.c_str()));
     }
     else {
       set_state(OperationState::ACKNOWLEDGE);
       m_context->mml_writer->record_state(this);
-      HT_MAYBE_FAIL(format("recover-server-ranges-%s-COMMIT", m_type_str.c_str()));
+      HT_MAYBE_FAIL(format("recover-server-ranges-%s-10", m_type_str.c_str()));
       commit_done = true;
     }
   case OperationState::ACKNOWLEDGE:
-    if (!commit_done && !validate_recovery_plan()) {
+    if (!commit_done && !validate_recovery_plan(blocked)) {
+      if (blocked)
+        break;
       set_state(OperationState::INITIAL);
       m_context->mml_writer->record_state(this);
-      HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL-REDO-g", m_type_str.c_str()));
+      HT_MAYBE_FAIL(format("recover-server-ranges-%s-11", m_type_str.c_str()));
       break;
     }
     if (!acknowledge()) {
       set_state(OperationState::INITIAL);
       m_context->mml_writer->record_state(this);
-      HT_MAYBE_FAIL(format("recover-server-ranges-%s-INITIAL-REDO-h", m_type_str.c_str()));
+      HT_MAYBE_FAIL(format("recover-server-ranges-%s-12", m_type_str.c_str()));
       break;
     }
     HT_INFOF("RecoverServerRanges complete for server %s attempt=%d type=%d state=%s",
           m_location.c_str(), m_attempt, m_type, OperationState::get_text(get_state()));
     complete_ok();
-    HT_MAYBE_FAIL(format("recover-server-ranges-%s-ACKNOWLEDGE", m_type_str.c_str()));
+    HT_MAYBE_FAIL(format("recover-server-ranges-%s-13", m_type_str.c_str()));
     break;
 
   default:
@@ -185,7 +203,9 @@ void OperationRecoverServerRanges::execute() {
 
 void OperationRecoverServerRanges::display_state(std::ostream &os) {
   os << " location=" << m_location << " attempt=" << m_attempt << " type="
-     << m_type << " state=" << OperationState::get_text(get_state());
+     << m_type << " num_ranges=" << m_ranges.size() << " num_fragments=" << m_fragments.size()
+     << " recovery_plan type=" << m_plan.type
+     << " state=" << OperationState::get_text(get_state());
 }
 
 const String OperationRecoverServerRanges::name() {
@@ -223,6 +243,12 @@ void OperationRecoverServerRanges::initialize_obstructions_dependencies() {
 size_t OperationRecoverServerRanges::encoded_state_length() const {
   size_t len = Serialization::encoded_length_vstr(m_location) + 4 + 4;
   len += m_plan.encoded_length();
+  if (m_plan.type == RangeSpec::UNKNOWN) {
+    // recovery plan not populated yet
+    len += 4;
+    foreach(const QualifiedRangeStateSpecManaged &range, m_ranges)
+      len += range.encoded_length();
+  }
   return len;
 }
 
@@ -231,6 +257,12 @@ void OperationRecoverServerRanges::encode_state(uint8_t **bufp) const {
   Serialization::encode_i32(bufp, m_type);
   Serialization::encode_i32(bufp, m_attempt);
   m_plan.encode(bufp);
+  if (m_plan.type == RangeSpec::UNKNOWN) {
+    // recovery plan not populated yet
+    Serialization::encode_i32(bufp, m_ranges.size());
+    foreach(const QualifiedRangeStateSpecManaged &range, m_ranges)
+      range.encode(bufp);
+  }
 }
 
 void OperationRecoverServerRanges::decode_state(const uint8_t **bufp, size_t *remainp) {
@@ -242,11 +274,22 @@ void OperationRecoverServerRanges::decode_request(const uint8_t **bufp, size_t *
   m_type = Serialization::decode_i32(bufp, remainp);
   m_attempt = Serialization::decode_i32(bufp, remainp);
   m_plan.decode(bufp, remainp);
-  // read fragments and ranges from m_plan
-  m_plan.receiver_plan.get_ranges(m_ranges);
-  m_plan.replay_plan.get_fragments(m_fragments);
+  if (m_plan.type == RangeSpec::UNKNOWN) {
+    // recovery plan not populated yet
+    uint32_t nn = Serialization::decode_i32(bufp, remainp);
+    for (uint32_t ii=0; ii<nn; ++ii) {
+      QualifiedRangeStateSpec range;
+      range.decode(bufp, remainp);
+      m_ranges.push_back(range);
+    }
+  }
+  else {
+    // read fragments and ranges from m_plan
+    m_plan.receiver_plan.get_ranges(m_ranges);
+    m_plan.replay_plan.get_fragments(m_fragments);
+  }
   set_type_str();
-  m_timeout = m_context->props->get_i32("Hypertable.Failover.Timeout");
+  m_timeout = 0;
 }
 
 bool OperationRecoverServerRanges::replay_commit_log() {
@@ -337,12 +380,30 @@ bool OperationRecoverServerRanges::replay_commit_log() {
   return success;
 }
 
-bool OperationRecoverServerRanges::validate_recovery_plan() {
+bool OperationRecoverServerRanges::validate_recovery_plan(bool &blocked) {
 
+  blocked = false;
   if (m_plan.type == RangeSpec::UNKNOWN)
     return false;
   StringSet active_locations;
   m_context->get_connected_servers(active_locations);
+  size_t total_servers = m_context->connected_server_count();
+  size_t quorum = (total_servers * m_context->props->get_i32("Hypertable.Failover.Quorum.Percentage") )/100;
+  if (active_locations.size() < quorum || active_locations.size() == 0) {
+    // wait for at least half the servers to be up before proceeding
+    HT_INFO_OUT << "Only " << active_locations.size() << " servers ready, total servers="
+        << total_servers << " quorum=" << quorum << ", wait for servers" << HT_END;
+    OperationPtr op = new OperationRecoveryBlocker(m_context);
+    try {
+      m_context->op->add_operation(op);
+    }
+    catch (Exception &e) {
+      HT_ERROR_OUT << e << HT_END;
+    }
+    blocked = true;
+    return false;
+  }
+
   HT_ASSERT(active_locations.size()>0);
 
   // make sure all players are still available
@@ -362,11 +423,29 @@ bool OperationRecoverServerRanges::validate_recovery_plan() {
   return true;
 }
 
-void OperationRecoverServerRanges::get_recovery_plan() {
+void OperationRecoverServerRanges::get_recovery_plan(bool &blocked) {
 
+  blocked = false;
   StringSet active_locations;
   m_context->get_connected_servers(active_locations);
-  HT_ASSERT(active_locations.size()>0);
+  size_t total_servers = m_context->connected_server_count();
+  size_t quorum = (total_servers * m_context->props->get_i32("Hypertable.Failover.Quorum.Percentage") )/100;
+
+  if (active_locations.size() < quorum || active_locations.size() == 0) {
+    blocked = true;
+    // wait for at least half the servers to be up before proceeding
+    HT_INFO_OUT << "Only " << active_locations.size() << " servers ready, total servers="
+        << total_servers << " quorum=" << quorum << ", wait for servers" << HT_END;
+
+    OperationPtr op = new OperationRecoveryBlocker(m_context);
+    try {
+      m_context->op->add_operation(op);
+    }
+    catch (Exception &e) {
+      HT_ERROR_OUT << e << HT_END;
+    }
+    return;
+  }
 
   if (m_plan.type != RangeSpec::UNKNOWN) {
     // modify existing plan
@@ -396,6 +475,7 @@ void OperationRecoverServerRanges::get_recovery_plan() {
       read_fragment_ids();
     assign_ranges(m_ranges, active_locations);
     assign_players(m_fragments, active_locations);
+    m_plan.type = m_type;
   }
 }
 

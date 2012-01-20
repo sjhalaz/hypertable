@@ -35,6 +35,7 @@ using namespace Hyperspace;
 OperationRecoverServer::OperationRecoverServer(ContextPtr &context, RangeServerConnectionPtr &rsc)
   : Operation(context, MetaLog::EntityType::OPERATION_RECOVER_SERVER),
   m_location(rsc->location()), m_rsc(rsc), m_hyperspace_handle(0), m_waiting(false) {
+  m_dependencies.insert(Dependency::RECOVERY_BLOCKER);
   m_exclusivities.insert(m_rsc->location());
   m_obstructions.insert(Dependency::RECOVER_SERVER);
   m_hash_code = md5_hash("RecoverServer") ^ md5_hash(m_rsc->location().c_str());
@@ -43,6 +44,7 @@ OperationRecoverServer::OperationRecoverServer(ContextPtr &context, RangeServerC
 OperationRecoverServer::OperationRecoverServer(ContextPtr &context,
     const MetaLog::EntityHeader &header_)
   : Operation(context, header_) {
+  m_dependencies.insert(Dependency::RECOVERY_BLOCKER);
 }
 
 void OperationRecoverServer::execute() {
@@ -50,8 +52,11 @@ void OperationRecoverServer::execute() {
   int state = get_state();
   int type;
 
-  HT_INFOF("Entering RecoverServer %s state=%s",
-           m_rsc->location().c_str(), OperationState::get_text(state));
+  HT_INFOF("Entering RecoverServer %s state=%s this=%p",
+           m_location.c_str(), OperationState::get_text(state), (void *)this);
+  if (!m_rsc)
+    HT_ASSERT(m_context->find_server_by_location(m_location, m_rsc));
+
   std::vector<Entity *> entities;
   Operation *sub_op;
 
@@ -101,9 +106,9 @@ void OperationRecoverServer::execute() {
     read_rsml();
     set_state(OperationState::ISSUE_REQUESTS);
     m_rsc->set_removed();
-    HT_MAYBE_FAIL("recover-server-INITIAL-a");
+    HT_MAYBE_FAIL("recover-server-1");
     m_context->mml_writer->record_state(this);
-    HT_MAYBE_FAIL("recover-server-INITIAL-b");
+    HT_MAYBE_FAIL("recover-server-2");
     break;
 
   case OperationState::ISSUE_REQUESTS:
@@ -164,15 +169,16 @@ void OperationRecoverServer::execute() {
     entities.push_back(this);
     HT_DEBUG_OUT << "added " << entities.size() << " sub_ops" << HT_END;
     m_context->mml_writer->record_state(entities);
-    HT_MAYBE_FAIL("recover-server-ISSUE_REQUESTS");
+    HT_MAYBE_FAIL("recover-server-3");
     break;
 
   case OperationState::FINALIZE:
     //Once recovery is complete, the master blows away the RSML and CL for the
     //server being recovered then it unlocks the hyperspace file
-    HT_MAYBE_FAIL("recover-server-FINALIZE");
     clear_server_state();
+    HT_MAYBE_FAIL("recover-server-5");
     complete_ok();
+    HT_MAYBE_FAIL("recover-server-6");
     break;
 
   default:
@@ -180,8 +186,8 @@ void OperationRecoverServer::execute() {
     break;
   }
 
-  HT_INFOF("Leaving RecoverServer %s state=%s",
-           m_rsc->location().c_str(), OperationState::get_text(get_state()));
+  HT_INFOF("Leaving RecoverServer %s state=%s this=%p",
+           m_rsc->location().c_str(), OperationState::get_text(get_state()), (void *)this);
 }
 
 OperationRecoverServer::~OperationRecoverServer() {
@@ -252,11 +258,11 @@ void OperationRecoverServer::acquire_server_lock() {
 }
 
 void OperationRecoverServer::display_state(std::ostream &os) {
-  os << " location=" << m_rsc->location() << " ";
+  os << " location=" << m_location << " ";
 }
 
 const String OperationRecoverServer::name() {
-  return "OperationRecoverServer";
+  return label();
 }
 
 const String OperationRecoverServer::label() {
@@ -265,8 +271,10 @@ const String OperationRecoverServer::label() {
 
 void OperationRecoverServer::clear_server_state() {
   // remove this RangeServerConnection entry
+  HT_INFO_OUT << "delete RangeServerConnection from mml for " << m_location << HT_END;
   m_context->mml_writer->record_removal(m_rsc.get());
   m_context->erase_server(m_rsc);
+  HT_MAYBE_FAIL("recover-server-4");
   // unlock hyperspace file
   Hyperspace::close_handle_ptr(m_context->hyperspace, &m_hyperspace_handle);
 }
@@ -376,7 +384,7 @@ void OperationRecoverServer::decode_request(const uint8_t **bufp, size_t *remain
     qrss.decode(bufp, remainp);
     m_user_ranges.push_back(qrss);
   }
-  m_context->find_server_by_location(m_location, m_rsc);
+  m_rsc = 0;
   m_hyperspace_handle = 0;
 }
 
